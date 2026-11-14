@@ -63,7 +63,13 @@ export interface TrajectoryPrediction {
  * the flared rear cap. Keeps spawns from starting embedded in the tabletop.
  */
 function penRestY(spec: PenPhysicsSpec): number {
-  return Math.max(spec.radius, spec.radius * spec.cap.radiusScale) + 0.005;
+  return (
+    Math.max(
+      spec.radius,
+      spec.radius * spec.cap.radiusScale,
+      spec.frontCap ? spec.radius * spec.frontCap.radiusScale : 0
+    ) + 0.005
+  );
 }
 
 export class PhysicsManager {
@@ -363,7 +369,7 @@ export class PhysicsManager {
 
     const spawn = {
       x: t.x,
-      y: Math.max(nextSpec.radius + 0.005, t.y),
+      y: Math.max(penRestY(nextSpec), t.y),
       z: t.z,
       yaw: 0,
     };
@@ -466,8 +472,19 @@ export class PhysicsManager {
       .setMass(spec.massSplit.body)
       .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
 
-    const tipColDesc = RAPIER.ColliderDesc.ball(spec.radius * 0.47)
-      .setTranslation(0, 0, tipZ)
+    const tipColDesc = (
+      spec.frontCap
+        ? (() => {
+            const frontCapRadius = spec.radius * spec.frontCap.radiusScale;
+            const frontCapLen = spec.length * spec.frontCap.lengthRatio;
+            const frontCapCenterZ = spec.length * spec.frontCap.centerZRatio;
+            const frontCapHalfSeg = Math.max(0.02, frontCapLen * 0.5 - frontCapRadius);
+            return RAPIER.ColliderDesc.capsule(frontCapHalfSeg, frontCapRadius)
+              .setRotation({ x: capsuleRot.x, y: capsuleRot.y, z: capsuleRot.z, w: capsuleRot.w })
+              .setTranslation(0, 0, frontCapCenterZ);
+          })()
+        : RAPIER.ColliderDesc.ball(spec.radius * 0.47).setTranslation(0, 0, tipZ)
+    )
       .setFriction(spec.friction)
       .setRestitution(spec.restitution)
       .setMass(spec.massSplit.tip)

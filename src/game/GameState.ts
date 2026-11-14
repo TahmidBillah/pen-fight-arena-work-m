@@ -1,5 +1,7 @@
 import {
+  ArenaId,
   ArenaOrientation,
+  DeshiColorVariantId,
   PEN_SPECS,
   PenAbilityId,
   PenSpecialShotId,
@@ -51,7 +53,9 @@ export interface GameSettings {
   graphicsQuality: QualityPreference;
   difficulty: DifficultyLevel;
   playerPenType: PenTypeId;
-  showTrajectory: boolean;
+  deshiVariant: DeshiColorVariantId;
+  /** Selected tabletop arena environment (visuals & lighting only; physics remain identical). */
+  arenaId: ArenaId;
   /** Real-time performance panel in the top-right of the gameplay screen. */
   showFps: boolean;
   /** Upper bound on shadow fidelity (the quality tier can lower it further). */

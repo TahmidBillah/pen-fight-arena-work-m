@@ -1,5 +1,10 @@
 import { GameMode, PenSkinId, TeamId, TurnTimerOption } from '../game/MultiplayerTypes';
-import { isPenTypeId, PenTypeId } from './Constants';
+import {
+  DeshiColorVariantId,
+  isDeshiColorVariantId,
+  isPenTypeId,
+  PenTypeId,
+} from './Constants';
 
 const MULTIPLAYER_STORAGE_KEY = 'pen_fight_arena_local_multiplayer_v1';
 
@@ -14,6 +19,7 @@ export interface LocalMultiplayerRecord {
   savedPlayerNames: Record<string, string>;
   savedPlayerPens: Record<string, PenTypeId>;
   savedPlayerSkins: Record<string, PenSkinId>;
+  savedPlayerDeshiVariants: Record<string, DeshiColorVariantId>;
 }
 
 const DEFAULT_RECORD: LocalMultiplayerRecord = {
@@ -27,6 +33,7 @@ const DEFAULT_RECORD: LocalMultiplayerRecord = {
   savedPlayerNames: {},
   savedPlayerPens: {},
   savedPlayerSkins: {},
+  savedPlayerDeshiVariants: {},
 };
 
 export class MultiplayerStorage {
@@ -41,12 +48,19 @@ export class MultiplayerStorage {
           if (isPenTypeId(v)) validPens[k] = v;
         }
       }
+      const validDeshiVariants: Record<string, DeshiColorVariantId> = {};
+      if (parsed.savedPlayerDeshiVariants) {
+        for (const [k, v] of Object.entries(parsed.savedPlayerDeshiVariants)) {
+          if (isDeshiColorVariantId(v)) validDeshiVariants[k] = v;
+        }
+      }
       return {
         ...DEFAULT_RECORD,
         ...parsed,
         savedPlayerNames: { ...DEFAULT_RECORD.savedPlayerNames, ...(parsed.savedPlayerNames || {}) },
         savedPlayerPens: validPens,
         savedPlayerSkins: { ...DEFAULT_RECORD.savedPlayerSkins, ...(parsed.savedPlayerSkins || {}) },
+        savedPlayerDeshiVariants: validDeshiVariants,
       };
     } catch {
       return { ...DEFAULT_RECORD };
@@ -83,12 +97,14 @@ export class MultiplayerStorage {
     names: Record<string, string>,
     pens: Record<string, PenTypeId>,
     timer: TurnTimerOption,
-    skins: Record<string, PenSkinId> = {}
+    skins: Record<string, PenSkinId> = {},
+    deshiVariants: Record<string, DeshiColorVariantId> = {}
   ): void {
     const data = this.load();
     data.savedPlayerNames = { ...data.savedPlayerNames, ...names };
     data.savedPlayerPens = { ...data.savedPlayerPens, ...pens };
     data.savedPlayerSkins = { ...data.savedPlayerSkins, ...skins };
+    data.savedPlayerDeshiVariants = { ...data.savedPlayerDeshiVariants, ...deshiVariants };
     data.timerPreference = timer;
     this.save(data);
   }

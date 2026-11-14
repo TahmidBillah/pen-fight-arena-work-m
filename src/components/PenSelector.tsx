@@ -1,8 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Check, ChevronLeft, ChevronRight, Lock, Sparkles, X } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, Lock, Palette, Sparkles, X } from 'lucide-react';
 import type { AchievementProgress } from '../game/Progression';
 import {
   derivePenStats,
+  DESHI_COLOR_VARIANTS,
+  DeshiColorVariantId,
+  getDeshiColorVariantSpec,
   PEN_ORDER,
   PEN_SPECS,
   penComZ,
@@ -16,9 +19,11 @@ import { PenPreviewViewer } from './PenPreviewViewer';
 interface PenSelectorProps {
   isOpen: boolean;
   equippedPen: PenTypeId;
+  deshiVariant: DeshiColorVariantId;
   unlockedPens: PenTypeId[];
   achievements: AchievementProgress[];
   onEquip: (pen: PenTypeId) => void;
+  onSelectDeshiVariant: (variant: DeshiColorVariantId) => void;
   onClose: () => void;
 }
 
@@ -39,9 +44,11 @@ const DETAIL_STATS: Array<{ key: keyof ReturnType<typeof derivePenStats>; label:
 export const PenSelector: React.FC<PenSelectorProps> = ({
   isOpen,
   equippedPen,
+  deshiVariant,
   unlockedPens,
   achievements,
   onEquip,
+  onSelectDeshiVariant,
   onClose,
 }) => {
   const initialIndex = Math.max(0, PEN_ORDER.indexOf(equippedPen));
@@ -135,7 +142,7 @@ export const PenSelector: React.FC<PenSelectorProps> = ({
           {/* 3D Specimen Stage on Warm Dotted Drafting Paper */}
           <div className="paper-dots-inset relative min-h-0 overflow-hidden border-b border-[#D9C5A8] md:border-b-0 md:border-r">
             <div className="absolute inset-0">
-              <PenPreviewViewer penType={penType} locked={!unlocked} />
+              <PenPreviewViewer penType={penType} deshiVariant={deshiVariant} locked={!unlocked} />
             </div>
 
             {/* Rarity stamp */}
@@ -196,6 +203,48 @@ export const PenSelector: React.FC<PenSelectorProps> = ({
           {/* Details Column */}
           <div className="modal-scroll-area min-h-0 overflow-y-auto px-4 py-4 sm:px-6">
             <p className="text-xs leading-relaxed text-[#57534E] sm:text-sm">{spec.description}</p>
+
+            {penType === 'DESHI_PEN' && (
+              <div className="mt-3.5 rounded-xl border-[1.5px] border-[#45413C] bg-[#F7F3EA] p-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-[#57534E]">
+                    <Palette className="h-3.5 w-3.5 text-[#4F6D8A]" />
+                    <span>Color Variant</span>
+                  </div>
+                  <span className="text-[11px] font-bold text-[#292725]">
+                    {getDeshiColorVariantSpec(deshiVariant).label}
+                  </span>
+                </div>
+                <div className="grid grid-cols-5 gap-1.5">
+                  {DESHI_COLOR_VARIANTS.map((variant) => {
+                    const active = deshiVariant === variant.id;
+                    return (
+                      <button
+                        key={variant.id}
+                        type="button"
+                        onClick={() => onSelectDeshiVariant(variant.id)}
+                        aria-pressed={active}
+                        className={`paper-btn flex flex-col items-center justify-center gap-1 rounded-lg border-[1.5px] px-1.5 py-2 text-center transition-colors ${
+                          active
+                            ? 'border-[#365B82] bg-[#E8EFF6]'
+                            : 'border-[#45413C]/65 bg-[#FFFDF8] hover:bg-[#EFEAE0]'
+                        }`}
+                      >
+                        <span
+                          className="flex h-5 w-5 items-center justify-center rounded-full border border-[#45413C]"
+                          style={{ backgroundColor: variant.swatchHex }}
+                        >
+                          {active && <Check className="h-3 w-3 text-white drop-shadow-sm" />}
+                        </span>
+                        <span className="truncate text-[10px] font-bold text-[#292725]">
+                          {variant.label}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* Headline Physics Bars */}
             <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2.5">

@@ -16,7 +16,13 @@ import { detectRecommendedQuality, SceneManager } from './SceneManager';
 import { ShotTrailSystem } from './ShotTrails';
 import { TableEnvironment } from './Table';
 import { TurnManager } from './TurnManager';
-import { ArenaOrientation, PenTypeId, resolveArenaOrientation } from '../utils/Constants';
+import {
+  ArenaId,
+  ArenaOrientation,
+  DEFAULT_DESHI_VARIANT,
+  PenTypeId,
+  resolveArenaOrientation,
+} from '../utils/Constants';
 
 /** The AI always fields the same pen class so the match-up stays fair and consistent. */
 const BOT_PEN_TYPE = 'IRON_FORCE' as const;
@@ -97,11 +103,19 @@ export class PenFightGame {
 
     this.arenaOrientation = resolveArenaOrientation(width, height);
     this.cameraManager = new CameraManager(width, height, this.arenaOrientation);
-    this.tableEnv = new TableEnvironment(this.sceneManager.maxAnisotropy);
+    this.tableEnv = new TableEnvironment(this.sceneManager.maxAnisotropy, this.settings.arenaId);
     this.tableEnv.setOrientation(this.arenaOrientation);
+    this.sceneManager.setArenaAtmosphere(this.settings.arenaId);
     this.sceneManager.scene.add(this.tableEnv.group);
 
-    this.playerPen = new PenModel('player', this.sceneManager.maxAnisotropy, this.settings.playerPenType, 'blue');
+    this.playerPen = new PenModel(
+      'player',
+      this.sceneManager.maxAnisotropy,
+      this.settings.playerPenType,
+      'blue',
+      'team_default',
+      this.settings.deshiVariant
+    );
     this.botPen = new PenModel('bot', this.sceneManager.maxAnisotropy, BOT_PEN_TYPE, 'red');
     this.sceneManager.scene.add(
       this.playerPen.group,
@@ -134,7 +148,6 @@ export class PenFightGame {
       }
     );
     this.aimController = new AimController();
-    this.aimController.setTrajectoryVisible(this.settings.showTrajectory);
     this.sceneManager.scene.add(this.aimController.group);
 
     this.aiController = new AIController(this.physics);
@@ -374,7 +387,8 @@ export class PenFightGame {
           this.sceneManager.maxAnisotropy,
           p.penType,
           p.team,
-          p.skinId ?? 'team_default'
+          p.skinId ?? 'team_default',
+          p.deshiVariant ?? DEFAULT_DESHI_VARIANT
         );
         this.sceneManager.scene.add(model.group, model.contactShadow);
         this.penModels.set(p.id, model);
@@ -385,7 +399,14 @@ export class PenFightGame {
       this.penTypes.set('player', this.settings.playerPenType);
       this.penTypes.set('bot', BOT_PEN_TYPE);
 
-      const pModel = new PenModel('player', this.sceneManager.maxAnisotropy, this.settings.playerPenType, 'blue');
+      const pModel = new PenModel(
+        'player',
+        this.sceneManager.maxAnisotropy,
+        this.settings.playerPenType,
+        'blue',
+        'team_default',
+        this.settings.deshiVariant
+      );
       const bModel = new PenModel('bot', this.sceneManager.maxAnisotropy, BOT_PEN_TYPE, 'red');
       this.sceneManager.scene.add(pModel.group, pModel.contactShadow, bModel.group, bModel.contactShadow);
       this.penModels.set('player', pModel);
@@ -536,7 +557,14 @@ export class PenFightGame {
       this.penTypes.set('player', this.settings.playerPenType);
       this.penTypes.set('bot', BOT_PEN_TYPE);
 
-      const pModel = new PenModel('player', this.sceneManager.maxAnisotropy, this.settings.playerPenType, 'blue');
+      const pModel = new PenModel(
+        'player',
+        this.sceneManager.maxAnisotropy,
+        this.settings.playerPenType,
+        'blue',
+        'team_default',
+        this.settings.deshiVariant
+      );
       const bModel = new PenModel('bot', this.sceneManager.maxAnisotropy, BOT_PEN_TYPE, 'red');
       this.sceneManager.scene.add(pModel.group, pModel.contactShadow, bModel.group, bModel.contactShadow);
       this.penModels.set('player', pModel);
@@ -561,14 +589,24 @@ export class PenFightGame {
 
   public applySettings(next: GameSettings): void {
     const penChanged = this.settings.playerPenType !== next.playerPenType;
-    this.settings = { ...next };
+    const deshiVariantChanged = this.settings.deshiVariant !== next.deshiVariant;
+    const arenaChanged = this.settings.arenaId !== next.arenaId;
+    const canSwitchArena = this.state.getSnapshot().matchState === 'MENU';
+    const resolvedArenaId: ArenaId =
+      arenaChanged && !canSwitchArena ? this.settings.arenaId : next.arenaId;
+    this.settings = { ...next, arenaId: resolvedArenaId };
     this.audio.setSfxEnabled(next.sfxEnabled);
     this.audio.setMusicEnabled(next.musicEnabled);
     if (this.sceneManager && this.qualityController) {
       this.applyQualityProfile();
     }
-    if (this.aimController) {
-      this.aimController.setTrajectoryVisible(next.showTrajectory);
+    if (arenaChanged && canSwitchArena && this.tableEnv && this.sceneManager) {
+      this.tableEnv.setArena(resolvedArenaId);
+      this.sceneManager.setArenaAtmosphere(resolvedArenaId);
+      this.sceneManager.requestShadowUpdate();
+      if (!this.sceneManager.isSoftwareGl) {
+        this.sceneManager.precompile(this.cameraManager.camera);
+      }
     }
     const isMultiplayer = Boolean(this.turnManager?.getMultiplayerConfig());
     if (penChanged && this.physics && this.playerPen && !isMultiplayer) {
@@ -576,7 +614,7 @@ export class PenFightGame {
       this.dragController?.cancelDrag();
       this.abilitySystem?.disarm('player');
       this.physics.setPenType('player', next.playerPenType);
-      this.playerPen.setPenType(next.playerPenType);
+      this.playerPen.setAppearance(next.playerPenType, 'blue', 'team_default', next.deshiVariant);
       // Rebuild the ability state: re-applies the new pen's passive to the freshly created rigid
       // body and clears any stale cooldown / active window carried over from the previous pen.
       this.abilitySystem?.reset(['player', 'bot']);
@@ -585,6 +623,9 @@ export class PenFightGame {
       this.syncVisualTransforms();
       this.sceneManager.requestShadowUpdate();
       this.dragController?.emitTelemetry();
+    } else if (deshiVariantChanged && this.playerPen && !isMultiplayer) {
+      this.playerPen.setDeshiVariant(next.deshiVariant);
+      this.sceneManager?.requestShadowUpdate();
     }
   }
 
@@ -721,7 +762,6 @@ export class PenFightGame {
       }
       this.applyAbilityPreview();
       this.dragController.setInputSteadying(this.abilitySystem.getSteadying(activeId));
-      this.aimController.setPrecisionMode(this.abilitySystem.isPrecisionActive(activeId));
       for (const id of this.penModels.keys()) {
         this.state.updateAbility(id, this.abilitySystem.getState(id));
       }
@@ -762,7 +802,7 @@ export class PenFightGame {
         activeModel.setHighlight(pulse, teamColor);
       }
     }
-    this.aimController.update(dragView, this.physics);
+    this.aimController.update(dragView);
     if (dragView.isDragging) {
       this.telemetryTimer += dt;
       if (this.telemetryTimer >= 0.045) {

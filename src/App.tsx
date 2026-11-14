@@ -29,13 +29,23 @@ import {
   ProgressionEvent,
   ProgressionManager,
 } from './game/Progression';
-import { isPenTypeId, PenTypeId, resolveArenaOrientation, STARTER_PEN } from './utils/Constants';
+import {
+  ArenaId,
+  DEFAULT_ARENA,
+  DEFAULT_DESHI_VARIANT,
+  DeshiColorVariantId,
+  isArenaId,
+  isDeshiColorVariantId,
+  isPenTypeId,
+  PenTypeId,
+  resolveArenaOrientation,
+  STARTER_PEN,
+} from './utils/Constants';
 import { MultiplayerStorage } from './utils/MultiplayerStorage';
 
-// v2: the performance settings block (FPS counter, quality tiers, resolution) was added, and the
-// FPS meter now defaults to visible. Bumping the key retires the v1 payload so those defaults
-// actually apply instead of being overridden by a stale "showFps: false".
-const SETTINGS_STORAGE_KEY = 'pen_fight_arena_settings_v2';
+// v3: FPS meter defaults to off; migrate v2 preferences while resetting showFps to false.
+const SETTINGS_STORAGE_KEY = 'pen_fight_arena_settings_v3';
+const PREV_SETTINGS_STORAGE_KEY = 'pen_fight_arena_settings_v2';
 const RECORD_STORAGE_KEY = 'pen_fight_arena_record_v1';
 
 const QUALITY_PREFS = ['AUTO', 'LOW', 'MEDIUM', 'HIGH', 'ULTRA'];
@@ -58,8 +68,9 @@ function getDefaultSettings(): GameSettings {
     graphicsQuality: 'AUTO',
     difficulty: 'NORMAL',
     playerPenType: STARTER_PEN,
-    showTrajectory: true,
-    showFps: true,
+    deshiVariant: DEFAULT_DESHI_VARIANT,
+    arenaId: DEFAULT_ARENA,
+    showFps: false,
     shadowQuality: 'HIGH',
     particleEffects: 'HIGH',
     motionEffects: true,
@@ -72,10 +83,17 @@ function loadInitialSettings(): GameSettings {
   const defaults = getDefaultSettings();
   try {
     const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
-    if (!raw) return defaults;
-    const merged = { ...defaults, ...JSON.parse(raw) } as GameSettings;
-    // Guard against stale pen ids from an older catalog build.
+    const prevRaw = !raw ? localStorage.getItem(PREV_SETTINGS_STORAGE_KEY) : null;
+    const sourceRaw = raw ?? prevRaw;
+    if (!sourceRaw) return defaults;
+    const merged = { ...defaults, ...JSON.parse(sourceRaw) } as GameSettings;
+    if (!raw && prevRaw) {
+      merged.showFps = false;
+    }
+    // Guard against stale pen ids or arena ids from an older catalog build.
     if (!isPenTypeId(merged.playerPenType)) merged.playerPenType = defaults.playerPenType;
+    if (!isDeshiColorVariantId(merged.deshiVariant)) merged.deshiVariant = defaults.deshiVariant;
+    if (!isArenaId(merged.arenaId)) merged.arenaId = defaults.arenaId;
     return sanitizeSettings(merged, defaults);
   } catch {
     return defaults;
@@ -417,13 +435,18 @@ export default function App() {
     setSettings((prev) => ({ ...prev, playerPenType: pen }));
   };
 
+  const handleSelectDeshiVariant = (deshiVariant: DeshiColorVariantId) => {
+    setSettings((prev) => ({ ...prev, deshiVariant }));
+  };
+
+  const handleSelectArena = (arenaId: ArenaId) => {
+    if (snapshot.matchState !== 'MENU') return;
+    setSettings((prev) => ({ ...prev, arenaId }));
+  };
+
   const handleToggleSfx = () => {
     gameRef.current?.audio.unlock();
     setSettings((prev) => ({ ...prev, sfxEnabled: !prev.sfxEnabled }));
-  };
-
-  const handleToggleTrajectory = () => {
-    setSettings((prev) => ({ ...prev, showTrajectory: !prev.showTrajectory }));
   };
 
   const isInMatch = snapshot.matchState !== 'MENU';
@@ -458,6 +481,7 @@ export default function App() {
         <MainMenu
           difficulty={settings.difficulty}
           penType={settings.playerPenType}
+          deshiVariant={settings.deshiVariant}
           sfxEnabled={settings.sfxEnabled}
           wins={snapshot.wins}
           losses={snapshot.losses}
@@ -482,11 +506,9 @@ export default function App() {
           snapshot={snapshot}
           difficulty={settings.difficulty}
           sfxEnabled={settings.sfxEnabled}
-          showTrajectory={settings.showTrajectory}
           monitor={gameRef.current?.monitor ?? null}
           showFps={settings.showFps}
           onToggleSfx={handleToggleSfx}
-          onToggleTrajectory={handleToggleTrajectory}
           onActivateAbility={() => gameRef.current?.activatePlayerAbility()}
           onPause={() => setPauseOpen(true)}
           onRestart={() => {
@@ -625,9 +647,11 @@ export default function App() {
       <PenSelector
         isOpen={penSelectorOpen}
         equippedPen={settings.playerPenType}
+        deshiVariant={settings.deshiVariant}
         unlockedPens={unlockedPens}
         achievements={achievements}
         onEquip={handleEquipPen}
+        onSelectDeshiVariant={handleSelectDeshiVariant}
         onClose={() => setPenSelectorOpen(false)}
       />
 
@@ -635,7 +659,13 @@ export default function App() {
       <HowToPlayModal isOpen={helpOpen} onClose={() => setHelpOpen(false)} />
 
       {/* Arena Selection Modal */}
-      <ArenaModal isOpen={arenasOpen} onClose={() => setArenasOpen(false)} />
+      <ArenaModal
+        isOpen={arenasOpen}
+        arenaId={settings.arenaId}
+        isInMatch={isInMatch}
+        onSelectArena={handleSelectArena}
+        onClose={() => setArenasOpen(false)}
+      />
 
       {/* Player Statistics Modal */}
       <StatsModal

@@ -1,5 +1,7 @@
 import {
   ArenaOrientation,
+  DEFAULT_DESHI_VARIANT,
+  DeshiColorVariantId,
   PenTypeId,
   STARTER_PEN,
   TABLE_HALF_D,
@@ -96,6 +98,7 @@ export interface PlayerConfig {
   team: TeamId;
   penType: PenTypeId;
   skinId?: PenSkinId;
+  deshiVariant?: DeshiColorVariantId;
   isAi?: boolean;
 }
 
@@ -170,7 +173,8 @@ export function getDefaultRosterForMode(
   mode: GameMode,
   savedNames: Record<string, string> = {},
   savedPens: Record<string, PenTypeId> = {},
-  savedSkins: Record<string, PenSkinId> = {}
+  savedSkins: Record<string, PenSkinId> = {},
+  savedDeshiVariants: Record<string, DeshiColorVariantId> = {}
 ): PlayerConfig[] {
   const modeSpec = MULTIPLAYER_MODES.find((m) => m.id === mode);
   const blueCount = modeSpec?.blueCount ?? 1;
@@ -178,6 +182,7 @@ export function getDefaultRosterForMode(
 
   const catalogPens: PenTypeId[] = [
     'GRIP_MASTER',
+    'DESHI_PEN',
     'IRON_FORCE',
     'SPEED_DEMON',
     'PRECISION_X',
@@ -198,6 +203,7 @@ export function getDefaultRosterForMode(
       team: 'blue',
       penType: savedPens[id] || defaultPen,
       skinId: savedSkins[id] || 'team_default',
+      deshiVariant: savedDeshiVariants[id] || DEFAULT_DESHI_VARIANT,
     });
   }
 
@@ -212,6 +218,7 @@ export function getDefaultRosterForMode(
       team: 'red',
       penType: savedPens[id] || defaultPen,
       skinId: savedSkins[id] || 'team_default',
+      deshiVariant: savedDeshiVariants[id] || 'blue',
     });
   }
 

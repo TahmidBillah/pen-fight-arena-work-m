@@ -1,5 +1,6 @@
-// Pen identity, physics specs, rarity, abilities and unlock conditions live in the catalog.
+// Pen and arena identity, physics specs, rarity, abilities and unlock conditions live in catalogs.
 export * from './PenCatalog';
+export * from './ArenaCatalog';
 import { PEN_SPECS, STARTER_PEN } from './PenCatalog';
 
 export type PowerZoneId = 'LOW' | 'MEDIUM' | 'HIGH' | 'MAXIMUM';

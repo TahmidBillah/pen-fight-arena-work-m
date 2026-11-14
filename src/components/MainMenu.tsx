@@ -12,12 +12,19 @@ import {
   VolumeX,
 } from 'lucide-react';
 import { DifficultyLevel } from '../game/GameState';
-import { PEN_SPECS, PenTypeId } from '../utils/Constants';
+import {
+  DeshiColorVariantId,
+  getDeshiColorVariantSpec,
+  PEN_ORDER,
+  PEN_SPECS,
+  PenTypeId,
+} from '../utils/Constants';
 import { getPaperRarityTheme, PaperDivider, PaperSectionLabel } from './PaperUI';
 
 interface MainMenuProps {
   difficulty: DifficultyLevel;
   penType: PenTypeId;
+  deshiVariant?: DeshiColorVariantId;
   sfxEnabled: boolean;
   wins: number;
   losses: number;
@@ -45,6 +52,7 @@ const DIFFICULTIES: Array<{ id: DifficultyLevel; label: string }> = [
 export const MainMenu: React.FC<MainMenuProps> = ({
   difficulty,
   penType,
+  deshiVariant,
   sfxEnabled,
   wins,
   losses,
@@ -63,6 +71,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
 }) => {
   const penSpec = PEN_SPECS[penType];
   const rarity = getPaperRarityTheme(penSpec.rarity);
+  const deshiColorSpec = penType === 'DESHI_PEN' ? getDeshiColorVariantSpec(deshiVariant) : null;
 
   return (
     <div className="pointer-events-none safe-pad-top safe-pad-bottom safe-pad-x fixed inset-0 z-20 flex flex-col justify-between gap-2 p-3 sm:p-6">
@@ -225,7 +234,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
 
             {/* Equipped Pen Compact Strip + Secondary Editorial Grid */}
             <div className="space-y-2.5">
-              <PaperSectionLabel right={`${unlockedCount}/6 Unlocked`}>
+              <PaperSectionLabel right={`${unlockedCount}/${PEN_ORDER.length} Unlocked`}>
                 Stationery &amp; Records
               </PaperSectionLabel>
 
@@ -242,6 +251,13 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                     <span className="truncate text-sm font-bold text-[#292725]">
                       {penSpec.label}
                     </span>
+                    {deshiColorSpec && (
+                      <span
+                        className="h-2.5 w-2.5 shrink-0 rounded-full border border-[#45413C]"
+                        style={{ backgroundColor: deshiColorSpec.swatchHex }}
+                        title={deshiColorSpec.label}
+                      />
+                    )}
                     <span
                       className={`shrink-0 rounded border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider ${rarity.badgeBg} ${rarity.badgeText} ${rarity.badgeBorder}`}
                     >
@@ -249,7 +265,8 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                     </span>
                   </span>
                   <span className="mt-0.5 block truncate text-[11px] text-[#6E6A64]">
-                    Pen Collection · {penSpec.passive.name}
+                    Pen Collection · {deshiColorSpec ? `${deshiColorSpec.label} · ` : ''}
+                    {penSpec.passive.name}
                   </span>
                 </span>
               </button>

@@ -12,16 +12,86 @@
 
 export type PenTypeId =
   | 'GRIP_MASTER'
+  | 'DESHI_PEN'
   | 'IRON_FORCE'
   | 'SPEED_DEMON'
   | 'PRECISION_X'
   | 'SPIN_MASTER'
   | 'TITAN_GUARD';
 
+export type DeshiColorVariantId = 'purple' | 'pink' | 'orange' | 'green' | 'blue';
+
+export interface DeshiColorVariantSpec {
+  id: DeshiColorVariantId;
+  label: string;
+  swatchHex: string;
+  bodyColorHex: number;
+  capAccentHex: number;
+  innerSleeveHex: number;
+}
+
+export const DESHI_COLOR_VARIANTS: readonly DeshiColorVariantSpec[] = [
+  {
+    id: 'purple',
+    label: 'Purple',
+    swatchHex: '#7C3AED',
+    bodyColorHex: 0x7c3aed,
+    capAccentHex: 0xa78bfa,
+    innerSleeveHex: 0x6d28d9,
+  },
+  {
+    id: 'pink',
+    label: 'Pink',
+    swatchHex: '#EC4899',
+    bodyColorHex: 0xec4899,
+    capAccentHex: 0xf472b6,
+    innerSleeveHex: 0xdb2777,
+  },
+  {
+    id: 'orange',
+    label: 'Orange',
+    swatchHex: '#F97316',
+    bodyColorHex: 0xf97316,
+    capAccentHex: 0xfb923c,
+    innerSleeveHex: 0xea580c,
+  },
+  {
+    id: 'green',
+    label: 'Green',
+    swatchHex: '#16A34A',
+    bodyColorHex: 0x16a34a,
+    capAccentHex: 0x4ade80,
+    innerSleeveHex: 0x15803d,
+  },
+  {
+    id: 'blue',
+    label: 'Blue',
+    swatchHex: '#2563EB',
+    bodyColorHex: 0x2563eb,
+    capAccentHex: 0x60a5fa,
+    innerSleeveHex: 0x1d4ed8,
+  },
+] as const;
+
+export const DEFAULT_DESHI_VARIANT: DeshiColorVariantId = 'purple';
+
+export function isDeshiColorVariantId(value: unknown): value is DeshiColorVariantId {
+  return (
+    typeof value === 'string' && DESHI_COLOR_VARIANTS.some((variant) => variant.id === value)
+  );
+}
+
+export function getDeshiColorVariantSpec(variantId?: DeshiColorVariantId): DeshiColorVariantSpec {
+  return (
+    DESHI_COLOR_VARIANTS.find((variant) => variant.id === variantId) ?? DESHI_COLOR_VARIANTS[0]
+  );
+}
+
 export type PenRarity = 'COMMON' | 'RARE' | 'EPIC' | 'LEGENDARY';
 
 export type PenAbilityId =
   | 'CAP_LOCK'
+  | 'DESHI_GLIDE'
   | 'HEAVY_IMPACT'
   | 'QUICK_RECOVERY'
   | 'PRECISION_PULL'
@@ -34,6 +104,7 @@ export type PenAbilityId =
  */
 export type PenSpecialShotId =
   | 'CAP_BURST'
+  | 'DESHI_FLICK'
   | 'TITAN_STRIKE'
   | 'PHANTOM_DASH'
   | 'CURVE_SHOT'
@@ -51,6 +122,7 @@ export type SpecialShotIconKey =
 
 export type PenVisualStyle =
   | 'GRIP_RINGS'
+  | 'DESHI_CLASSIC'
   | 'HEAVY_BRASS'
   | 'SLIM_LIGHT'
   | 'PRECISION'
@@ -117,7 +189,10 @@ export const ACHIEVEMENTS: readonly AchievementDef[] = [
   },
 ] as const;
 
-export type PenUnlock = { type: 'STARTER' } | { type: 'ACHIEVEMENT'; achievementId: AchievementId };
+export type PenUnlock =
+  | { type: 'STARTER' }
+  | { type: 'COLLECTIBLE' }
+  | { type: 'ACHIEVEMENT'; achievementId: AchievementId };
 
 /**
  * Removable rear cap geometry & surface response for a specific pen, shared by the visual
@@ -274,6 +349,12 @@ export interface PenPhysicsSpec {
   restitution: number;
   /** Rear cap geometry, retention & surface response. */
   cap: PenCapSpec;
+  /** Optional protective front cap collider geometry (for capped pens like Deshi Pen). */
+  frontCap?: {
+    lengthRatio: number;
+    radiusScale: number;
+    centerZRatio: number;
+  };
 
   // --- Visuals ---
   visualStyle: PenVisualStyle;
@@ -401,6 +482,25 @@ const IMPACT_GUARD: PenPassiveSpec = {
     angularSpeedCeiling: -1,
     inputSteadying: 0,
     rotationalResponseScale: 0.9,
+  },
+};
+
+const DESHI_GLIDE: PenPassiveSpec = {
+  id: 'DESHI_GLIDE',
+  name: 'Desk Glide',
+  summary: 'Glossy slim barrel glides fast with crisp flick control.',
+  detail:
+    'The smooth molded plastic body lowers tabletop friction losses while the balanced front cap keeps the trajectory steady. Light and nimble on release, with slightly less resistance to heavy knock-back.',
+  tuning: {
+    angularDampingScale: 1.12,
+    linearDampingScale: 0.9,
+    capFrictionBonus: 0.15,
+    accelerationScale: 1.07,
+    impactMomentumScale: 1.02,
+    knockbackResistance: 0.02,
+    angularSpeedCeiling: -1,
+    inputSteadying: 0.22,
+    rotationalResponseScale: 1.08,
   },
 };
 
@@ -588,6 +688,36 @@ const SHOCKWAVE: PenSpecialShotSpec = {
   },
 };
 
+const DESHI_FLICK: PenSpecialShotSpec = {
+  id: 'DESHI_FLICK',
+  name: 'Classic Flick',
+  icon: 'DASH',
+  summary: 'Snappy straight-line desk flick with low friction glide.',
+  description:
+    'Channels a sharp school-desk finger flick into a fast, flat surge with crisp directional control. Leaves a vibrant energy trail.',
+  durationSeconds: 0.85,
+  cooldownSeconds: SPECIAL_SHOT_BASELINE.cooldownSeconds,
+  maxUsesPerMatch: -1,
+  colorHex: 0x8b5cf6,
+  physics: {
+    initialSpeedScale: 0.88,
+    addedMass: 0.05,
+    forwardForce: 46,
+    lateralForce: 0,
+    torque: 0,
+    spinAngularSpeed: 0,
+    angularDamping: 0.8,
+    linearDamping: 0.1,
+    rampSeconds: 0.08,
+    stabilizeSeconds: 0.3,
+    speedCeiling: 14.8,
+    liftRatio: 0.35,
+    radialImpulse: 0,
+    radialRadius: 0,
+    radialFalloff: 2,
+  },
+};
+
 
 export const PEN_SPECS: Record<PenTypeId, PenPhysicsSpec> = {
   GRIP_MASTER: {
@@ -625,6 +755,48 @@ export const PEN_SPECS: Record<PenTypeId, PenPhysicsSpec> = {
     accentColorHex: 0xe2e8f0,
     gripColorHex: 0x0f2a5c,
     nibColorHex: 0xe5c158,
+  },
+
+  DESHI_PEN: {
+    id: 'DESHI_PEN',
+    label: 'Deshi Pen',
+    className: 'Collectible Pen',
+    tagline: 'Slim glossy classic with transparent curved protective cap',
+    description:
+      'An iconic slim cylindrical ballpoint built for school-desk duels. Features a smooth glossy plastic body, distinctive rear-end plug cap, metallic nib assembly, and a crystal-clear curved protective cap.',
+    rarity: 'RARE',
+    unlock: { type: 'COLLECTIBLE' },
+    passive: DESHI_GLIDE,
+    specialShot: DESHI_FLICK,
+    length: 3.42,
+    radius: 0.122,
+    mass: 0.86,
+    massSplit: { cap: 0.11, tail: 0.09, body: 0.48, tip: 0.18 },
+    yawInertiaScale: 1.02,
+    linearDamping: 0.86,
+    angularDamping: 1.98,
+    friction: 0.27,
+    restitution: 0.48,
+    cap: {
+      lengthRatio: 0.13,
+      radiusScale: 1.1,
+      centerZRatio: -0.435,
+      frictionScale: 1.14,
+      restitutionScale: 0.9,
+      retention: 0.88,
+    },
+    frontCap: {
+      lengthRatio: 0.33,
+      radiusScale: 1.1,
+      centerZRatio: 0.335,
+    },
+    visualStyle: 'DESHI_CLASSIC',
+    roughness: 0.16,
+    metalness: 0.02,
+    primaryColorHex: 0x7c3aed,
+    accentColorHex: 0xa78bfa,
+    gripColorHex: 0x6d28d9,
+    nibColorHex: 0xdde3eb,
   },
 
   IRON_FORCE: {
@@ -816,6 +988,7 @@ export const PEN_SPECS: Record<PenTypeId, PenPhysicsSpec> = {
 /** Stable display / navigation order for the collection. */
 export const PEN_ORDER: readonly PenTypeId[] = [
   'GRIP_MASTER',
+  'DESHI_PEN',
   'SPEED_DEMON',
   'PRECISION_X',
   'SPIN_MASTER',

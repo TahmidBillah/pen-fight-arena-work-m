@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { ArenaId, DEFAULT_ARENA } from '../utils/Constants';
 import { GraphicsQuality } from './GameState';
 import { QualityProfile } from './QualityController';
 import { profileDevice } from './DeviceProfile';
@@ -48,7 +49,9 @@ export class SceneManager {
   public readonly isSoftwareGl: boolean;
   public readonly maxAnisotropy: number;
 
+  private readonly hemiLight: THREE.HemisphereLight;
   private readonly keyLight: THREE.DirectionalLight;
+  private readonly rimLight: THREE.DirectionalLight;
   private readonly envRT: THREE.WebGLRenderTarget;
   private readonly container: HTMLElement;
   private contextLostHandler: (e: Event) => void;
@@ -100,8 +103,8 @@ export class SceneManager {
     pmremGenerator.dispose();
 
     // Balanced 3-point classroom lighting rig
-    const hemi = new THREE.HemisphereLight(0xdfefff, 0x8d6e53, 0.85);
-    this.scene.add(hemi);
+    this.hemiLight = new THREE.HemisphereLight(0xdfefff, 0x8d6e53, 0.85);
+    this.scene.add(this.hemiLight);
 
     this.keyLight = new THREE.DirectionalLight(0xfff1d6, 2.05);
     this.keyLight.position.set(10, 16, 8);
@@ -121,9 +124,11 @@ export class SceneManager {
     this.keyLight.shadow.normalBias = 0.002;
     this.scene.add(this.keyLight);
 
-    const rimLight = new THREE.DirectionalLight(0xcbe2ff, 0.65);
-    rimLight.position.set(-10, 8, -10);
-    this.scene.add(rimLight);
+    this.rimLight = new THREE.DirectionalLight(0xcbe2ff, 0.65);
+    this.rimLight.position.set(-10, 8, -10);
+    this.scene.add(this.rimLight);
+
+    this.setArenaAtmosphere(DEFAULT_ARENA);
 
     const dom = this.renderer.domElement;
     dom.style.display = 'block';
@@ -145,6 +150,62 @@ export class SceneManager {
     };
     dom.addEventListener('webglcontextlost', this.contextLostHandler);
     dom.addEventListener('webglcontextrestored', this.contextRestoredHandler);
+  }
+
+  /** Updates background, fog, and 3-point light temperatures to match the selected arena. */
+  public setArenaAtmosphere(arenaId: ArenaId): void {
+    const bg = this.scene.background as THREE.Color;
+    const fog = this.scene.fog as THREE.FogExp2 | null;
+
+    if (arenaId === 'LIBRARY_DESK') {
+      bg.setHex(0xe2d3ba);
+      if (fog) {
+        fog.color.setHex(0xe2d3ba);
+        fog.density = 0.0036;
+      }
+      this.hemiLight.color.setHex(0xfff0d4);
+      this.hemiLight.groundColor.setHex(0x7c5a3c);
+      this.hemiLight.intensity = 0.84;
+
+      this.keyLight.color.setHex(0xffe7bd);
+      this.keyLight.intensity = 2.0;
+
+      this.rimLight.color.setHex(0xf2d7ab);
+      this.rimLight.intensity = 0.58;
+      this.renderer.toneMappingExposure = 1.06;
+    } else if (arenaId === 'SCIENCE_LAB') {
+      bg.setHex(0xdde3e7);
+      if (fog) {
+        fog.color.setHex(0xdde3e7);
+        fog.density = 0.0031;
+      }
+      this.hemiLight.color.setHex(0xf2f7fc);
+      this.hemiLight.groundColor.setHex(0x88929a);
+      this.hemiLight.intensity = 0.9;
+
+      this.keyLight.color.setHex(0xfafcff);
+      this.keyLight.intensity = 2.0;
+
+      this.rimLight.color.setHex(0xd4e6f7);
+      this.rimLight.intensity = 0.68;
+      this.renderer.toneMappingExposure = 1.06;
+    } else {
+      bg.setHex(0xe6dccb);
+      if (fog) {
+        fog.color.setHex(0xe6dccb);
+        fog.density = 0.0034;
+      }
+      this.hemiLight.color.setHex(0xdfefff);
+      this.hemiLight.groundColor.setHex(0x8d6e53);
+      this.hemiLight.intensity = 0.85;
+
+      this.keyLight.color.setHex(0xfff1d6);
+      this.keyLight.intensity = 2.05;
+
+      this.rimLight.color.setHex(0xcbe2ff);
+      this.rimLight.intensity = 0.65;
+      this.renderer.toneMappingExposure = 1.08;
+    }
   }
 
   /**

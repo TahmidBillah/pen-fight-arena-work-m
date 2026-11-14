@@ -9,7 +9,7 @@ import {
   ResolutionPreference,
   ShadowQuality,
 } from '../game/GameState';
-import { PEN_SPECS } from '../utils/Constants';
+import { getDeshiColorVariantSpec, PEN_SPECS } from '../utils/Constants';
 import {
   getPaperRarityTheme,
   PaperDivider,
@@ -93,6 +93,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const penSpec = PEN_SPECS[settings.playerPenType];
   const rarity = getPaperRarityTheme(penSpec.rarity);
+  const deshiColorSpec =
+    settings.playerPenType === 'DESHI_PEN'
+      ? getDeshiColorVariantSpec(settings.deshiVariant)
+      : null;
 
   return (
     <PaperModalShell
@@ -127,19 +131,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         {/* Gameplay & Controls Section */}
         <div className="space-y-2.5">
           <PaperSectionLabel>Gameplay &amp; Controls</PaperSectionLabel>
-          <SettingsRow
-            title="Trajectory Prediction"
-            hint="Physics-simulated path & landing reticle"
-          >
-            <PaperToggle
-              label="Toggle trajectory prediction"
-              checked={settings.showTrajectory}
-              onChange={() =>
-                onUpdateSettings({ ...settings, showTrajectory: !settings.showTrajectory })
-              }
-            />
-          </SettingsRow>
-
           <SettingsRow title="Motion Effects" hint="Camera shake, hitstop & shot-follow camera">
             <PaperToggle
               label="Toggle motion effects"
@@ -193,6 +184,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <span className="truncate text-sm font-bold text-[#292725]">
                     {penSpec.label}
                   </span>
+                  {deshiColorSpec && (
+                    <span
+                      className="h-2.5 w-2.5 shrink-0 rounded-full border border-[#45413C]"
+                      style={{ backgroundColor: deshiColorSpec.swatchHex }}
+                      title={deshiColorSpec.label}
+                    />
+                  )}
                   <span
                     className={`shrink-0 rounded border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider ${rarity.badgeBg} ${rarity.badgeText} ${rarity.badgeBorder}`}
                   >
@@ -200,6 +198,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </span>
                 </span>
                 <span className="mt-0.5 block truncate text-[11px] text-[#6E6A64]">
+                  {deshiColorSpec ? `${deshiColorSpec.label} · ` : ''}
                   {penSpec.tagline}
                 </span>
               </span>

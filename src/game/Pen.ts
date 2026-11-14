@@ -3,6 +3,9 @@ import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 import {
   BOT_ACCENT_HEX,
   BOT_COLOR_HEX,
+  DEFAULT_DESHI_VARIANT,
+  DeshiColorVariantId,
+  getDeshiColorVariantSpec,
   PEN_SPECS,
   PenPhysicsSpec,
   PenTypeId,
@@ -119,6 +122,7 @@ export class PenModel {
   public penType: PenTypeId;
   public team: 'blue' | 'red';
   public skinId: PenSkinId;
+  public deshiVariant: DeshiColorVariantId;
 
   /**
    * Removable rear cap, kept as its own sub-group so a future removal feature can detach,
@@ -131,7 +135,7 @@ export class PenModel {
   private highlightGlow!: THREE.Mesh;
   private readonly disposables: Array<{ dispose: () => void }> = [];
   private readonly shadowDisposables: Array<{ dispose: () => void }> = [];
-  private currentRadius = PEN_SPECS.GRIP_MASTER.radius;
+  private currentRestY = PEN_SPECS.GRIP_MASTER.radius + 0.005;
   private baseShadowWidth = 0.5;
   private baseShadowLength = 3.5;
 
@@ -140,13 +144,15 @@ export class PenModel {
     maxAnisotropy: number,
     penType: PenTypeId = 'GRIP_MASTER',
     team: 'blue' | 'red' = (id === 'bot' || id.startsWith('red') ? 'red' : 'blue'),
-    skinId: PenSkinId = 'team_default'
+    skinId: PenSkinId = 'team_default',
+    deshiVariant: DeshiColorVariantId = DEFAULT_DESHI_VARIANT
   ) {
     this.id = id;
     this.maxAnisotropy = maxAnisotropy;
     this.penType = penType;
     this.team = team;
     this.skinId = skinId;
+    this.deshiVariant = deshiVariant;
 
     // Contact shadow plane positioned directly beneath pen on the tabletop
     _sharedTextureUsers++;
@@ -173,11 +179,33 @@ export class PenModel {
     this.buildGeometry(penType);
   }
 
-  public setAppearance(penType: PenTypeId, team: 'blue' | 'red', skinId: PenSkinId): void {
-    if (this.penType === penType && this.team === team && this.skinId === skinId) return;
+  public setDeshiVariant(deshiVariant: DeshiColorVariantId): void {
+    if (this.deshiVariant === deshiVariant) return;
+    this.deshiVariant = deshiVariant;
+    if (this.penType === 'DESHI_PEN') {
+      this.clearModelParts();
+      this.buildGeometry(this.penType);
+    }
+  }
+
+  public setAppearance(
+    penType: PenTypeId,
+    team: 'blue' | 'red',
+    skinId: PenSkinId,
+    deshiVariant: DeshiColorVariantId = this.deshiVariant
+  ): void {
+    if (
+      this.penType === penType &&
+      this.team === team &&
+      this.skinId === skinId &&
+      this.deshiVariant === deshiVariant
+    ) {
+      return;
+    }
     this.penType = penType;
     this.team = team;
     this.skinId = skinId;
+    this.deshiVariant = deshiVariant;
     this.clearModelParts();
     this.buildGeometry(penType);
   }
@@ -203,7 +231,12 @@ export class PenModel {
     const lenScale = spec.length / 3.2;
     const radius = spec.radius;
     const halfLen = spec.length * 0.5;
-    this.currentRadius = radius;
+    this.currentRestY =
+      Math.max(
+        radius,
+        radius * spec.cap.radiusScale,
+        spec.frontCap ? radius * spec.frontCap.radiusScale : 0
+      ) + 0.005;
 
     // Calibrate contact shadow scale based on pen dimensions & procedural texture fractions:
     // Barrel section in texture is 210 * 2 / 512 = 0.8203125
@@ -214,6 +247,11 @@ export class PenModel {
     this.baseShadowLength = shadowBarrelLen / bodyFraction;
     this.baseShadowWidth = (radius * 2) / widthFraction;
     this.contactShadow.scale.set(this.baseShadowWidth, 1, this.baseShadowLength);
+
+    if (style === 'DESHI_CLASSIC') {
+      this.buildDeshiPenGeometry(spec, isBlueTeam);
+      return;
+    }
 
     const skinSpec = getPenSkinSpec(this.skinId);
     const hasCustomSkin = skinSpec.id !== 'team_default' && skinSpec.primaryColorHex !== undefined;
@@ -455,6 +493,369 @@ export class PenModel {
     this.disposables.push(glowGeo, glowMat);
 
     // 10) Invisible cylindrical proxy mesh for raycasting
+    const proxyGeo = new THREE.CylinderGeometry(radius * 2.6, radius * 2.6, spec.length + 0.42, 12);
+    proxyGeo.rotateX(Math.PI * 0.5);
+    const proxyMat = new THREE.MeshBasicMaterial({ visible: false });
+    this.raycastProxy = new THREE.Mesh(proxyGeo, proxyMat);
+    this.raycastProxy.userData.penId = this.id;
+    this.group.add(this.raycastProxy);
+    this.disposables.push(proxyGeo, proxyMat);
+  }
+
+  /**
+   * Builds the multi-part collectible Deshi Pen model:
+   * - Slim smooth glossy cylindrical plastic barrel
+   * - Distinctive rear-end cap (mounted in `capGroup` so it behaves with the rear collider)
+   * - Metal-colored nib assembly (ferrule collar, tapered metal cone, fine tip & tungsten ball)
+   * - Internal cap details (colored locking ring, frosted inner nib-seal cup, internal ribs)
+   * - Realistic transparent curved protective front cap & pocket clip
+   */
+  private buildDeshiPenGeometry(spec: PenPhysicsSpec, isBlueTeam: boolean): void {
+    const variant = getDeshiColorVariantSpec(this.deshiVariant);
+    const radius = spec.radius;
+    const halfLen = spec.length * 0.5; // 1.71
+    const rearCapLen = spec.length * spec.cap.lengthRatio; // ~0.445
+    const rearCapRadius = radius * spec.cap.radiusScale; // ~0.134
+    const rearJoinZ = -halfLen + rearCapLen; // ~-1.265
+    const neckStartZ = 0.59;
+    const neckEndZ = 0.87;
+
+    // 1. Glossy injection-molded plastic materials (zero text or branding)
+    const barrelMat = new THREE.MeshPhysicalMaterial({
+      color: variant.bodyColorHex,
+      roughness: 0.14,
+      metalness: 0.02,
+      clearcoat: 0.96,
+      clearcoatRoughness: 0.05,
+      reflectivity: 0.85,
+      envMapIntensity: 1.25,
+    });
+
+    const rearCapMat = new THREE.MeshPhysicalMaterial({
+      color: variant.bodyColorHex,
+      roughness: 0.16,
+      metalness: 0.02,
+      clearcoat: 0.92,
+      clearcoatRoughness: 0.06,
+      reflectivity: 0.8,
+      envMapIntensity: 1.2,
+      side: THREE.DoubleSide,
+    });
+
+    const seamMat = new THREE.MeshStandardMaterial({
+      color: variant.innerSleeveHex,
+      roughness: 0.34,
+      metalness: 0.06,
+    });
+
+    const nibMetalMat = new THREE.MeshStandardMaterial({
+      color: spec.nibColorHex,
+      roughness: 0.16,
+      metalness: 0.94,
+      envMapIntensity: 1.35,
+    });
+
+    const tungstenBallMat = new THREE.MeshStandardMaterial({
+      color: 0x1e293b,
+      roughness: 0.15,
+      metalness: 0.85,
+    });
+
+    const inkCoreMat = new THREE.MeshStandardMaterial({
+      color: 0x0f172a,
+      roughness: 0.35,
+      metalness: 0.1,
+    });
+
+    const innerCapAccentMat = new THREE.MeshPhysicalMaterial({
+      color: variant.capAccentHex,
+      roughness: 0.22,
+      metalness: 0.04,
+      clearcoat: 0.6,
+      transparent: true,
+      opacity: 0.82,
+      side: THREE.DoubleSide,
+    });
+
+    const innerSealCupMat = new THREE.MeshPhysicalMaterial({
+      color: variant.innerSleeveHex,
+      roughness: 0.3,
+      metalness: 0.02,
+      transparent: true,
+      opacity: 0.72,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+
+    const innerRibMat = new THREE.MeshStandardMaterial({
+      color: 0xe2e8f0,
+      roughness: 0.24,
+      metalness: 0.04,
+      transparent: true,
+      opacity: 0.42,
+      depthWrite: false,
+    });
+
+    const clearCapMat = new THREE.MeshPhysicalMaterial({
+      color: 0xf8fafc,
+      roughness: 0.06,
+      metalness: 0.0,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.04,
+      ior: 1.49,
+      reflectivity: 0.95,
+      envMapIntensity: 1.55,
+      transparent: true,
+      opacity: 0.34,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+
+    this.disposables.push(
+      barrelMat,
+      rearCapMat,
+      seamMat,
+      nibMetalMat,
+      tungstenBallMat,
+      inkCoreMat,
+      innerCapAccentMat,
+      innerSealCupMat,
+      innerRibMat,
+      clearCapMat
+    );
+
+    // 2. Slim, smooth glossy plastic barrel with snap-ridge and tapered front shoulder
+    const barrelPts = [
+      new THREE.Vector2(radius * 0.86, rearJoinZ),
+      new THREE.Vector2(radius * 0.99, rearJoinZ + 0.02),
+      new THREE.Vector2(radius, rearJoinZ + 0.06),
+      new THREE.Vector2(radius, neckStartZ - 0.02),
+      // Subtle molded cap-snap ring & groove where the protective cap clicks shut
+      new THREE.Vector2(radius * 1.035, neckStartZ),
+      new THREE.Vector2(radius * 0.96, neckStartZ + 0.03),
+      new THREE.Vector2(radius * 0.95, neckStartZ + 0.06),
+      new THREE.Vector2(radius * 0.86, neckEndZ - 0.08),
+      new THREE.Vector2(radius * 0.66, neckEndZ),
+      new THREE.Vector2(radius * 0.42, neckEndZ),
+    ];
+    const barrelGeo = new THREE.LatheGeometry(barrelPts, 24);
+    barrelGeo.rotateX(Math.PI * 0.5);
+    const barrelMesh = new THREE.Mesh(barrelGeo, barrelMat);
+    barrelMesh.castShadow = true;
+    barrelMesh.receiveShadow = true;
+    this.group.add(barrelMesh);
+    this.visualMeshes.push(barrelMesh);
+    this.disposables.push(barrelGeo);
+
+    // Subtle recessed ink refill visible at neck entrance
+    const inkStemGeo = new THREE.CylinderGeometry(radius * 0.24, radius * 0.24, 0.16, 12);
+    inkStemGeo.rotateX(Math.PI * 0.5);
+    const inkStem = new THREE.Mesh(inkStemGeo, inkCoreMat);
+    inkStem.position.z = neckEndZ - 0.04;
+    this.group.add(inkStem);
+    this.visualMeshes.push(inkStem);
+    this.disposables.push(inkStemGeo);
+
+    // 3. Small metal-colored nib assembly visible inside the transparent front cap
+    const metalGeos: THREE.BufferGeometry[] = [];
+
+    // Brushed metal ferrule collar seated on the plastic barrel neck
+    const ferruleGeo = new THREE.CylinderGeometry(radius * 0.64, radius * 0.66, 0.085, 18);
+    ferruleGeo.rotateX(Math.PI * 0.5);
+    ferruleGeo.translate(0, 0, neckEndZ + 0.04);
+    metalGeos.push(ferruleGeo);
+
+    // Tapered metallic nib cone
+    const nibConePts = [
+      new THREE.Vector2(radius * 0.62, neckEndZ + 0.082),
+      new THREE.Vector2(radius * 0.54, neckEndZ + 0.14),
+      new THREE.Vector2(radius * 0.27, neckEndZ + 0.29),
+      new THREE.Vector2(radius * 0.14, neckEndZ + 0.36),
+      new THREE.Vector2(0.015, neckEndZ + 0.46),
+    ];
+    const nibConeGeo = new THREE.LatheGeometry(nibConePts, 18);
+    nibConeGeo.rotateX(Math.PI * 0.5);
+    metalGeos.push(nibConeGeo);
+
+    const sanitizedMetal = metalGeos.map((g) => (g.index ? g : BufferGeometryUtils.mergeVertices(g)));
+    const mergedNibGeo = BufferGeometryUtils.mergeGeometries(sanitizedMetal, false) ?? metalGeos[0];
+    for (const g of metalGeos) {
+      if (g !== mergedNibGeo) g.dispose();
+    }
+    for (const g of sanitizedMetal) {
+      if (g !== mergedNibGeo && !metalGeos.includes(g)) g.dispose();
+    }
+    const nibMesh = new THREE.Mesh(mergedNibGeo, nibMetalMat);
+    nibMesh.castShadow = true;
+    nibMesh.receiveShadow = true;
+    nibMesh.renderOrder = 2;
+    this.group.add(nibMesh);
+    this.visualMeshes.push(nibMesh);
+    this.disposables.push(mergedNibGeo);
+
+    // Fine writing ball at nib tip
+    const tipBallGeo = new THREE.SphereGeometry(0.015, 10, 10);
+    const tipBall = new THREE.Mesh(tipBallGeo, tungstenBallMat);
+    tipBall.position.z = neckEndZ + 0.468;
+    tipBall.renderOrder = 2;
+    this.group.add(tipBall);
+    this.visualMeshes.push(tipBall);
+    this.disposables.push(tipBallGeo);
+
+    // 4. Distinctive rear-end cap (mounted inside capGroup so it stays synced with rear collider)
+    const rearProfile = [
+      new THREE.Vector2(0.0, -halfLen),
+      new THREE.Vector2(rearCapRadius * 0.48, -halfLen + 0.008),
+      new THREE.Vector2(rearCapRadius * 0.86, -halfLen + 0.045),
+      new THREE.Vector2(rearCapRadius * 0.98, -halfLen + 0.105),
+      new THREE.Vector2(rearCapRadius, -halfLen + 0.15),
+      new THREE.Vector2(rearCapRadius, rearJoinZ - 0.03),
+      new THREE.Vector2(rearCapRadius * 0.96, rearJoinZ),
+      new THREE.Vector2(radius * 0.96, rearJoinZ),
+    ];
+    const rearCapGeo = new THREE.LatheGeometry(rearProfile, 24);
+    rearCapGeo.rotateX(Math.PI * 0.5);
+    const rearCapMesh = new THREE.Mesh(rearCapGeo, rearCapMat);
+    rearCapMesh.castShadow = true;
+    rearCapMesh.receiveShadow = true;
+    this.capGroup.add(rearCapMesh);
+    this.disposables.push(rearCapGeo);
+
+    // Accent seam collar at the rear-cap junction
+    const rearSeamGeo = new THREE.TorusGeometry(rearCapRadius * 0.98, 0.009, 8, 24);
+    const rearSeam = new THREE.Mesh(rearSeamGeo, seamMat);
+    rearSeam.position.z = rearJoinZ - 0.01;
+    this.capGroup.add(rearSeam);
+    this.disposables.push(rearSeamGeo);
+
+    // Subtle recessed rear end button ring
+    const tailPlugGeo = new THREE.TorusGeometry(rearCapRadius * 0.56, 0.007, 8, 20);
+    const tailPlug = new THREE.Mesh(tailPlugGeo, seamMat);
+    tailPlug.position.z = -halfLen + 0.014;
+    this.capGroup.add(tailPlug);
+    this.disposables.push(tailPlugGeo);
+
+    this.capGroup.visible = this.capAttached;
+    this.group.add(this.capGroup);
+    this.visualMeshes.push(rearCapMesh, rearSeam, tailPlug);
+
+    // 5. Internal cap details clearly visible through the transparent protective cap (renderOrder: 2)
+    const frontCapRadius = radius * (spec.frontCap?.radiusScale ?? 1.1);
+    const frontCapStartZ = neckStartZ - 0.03; // +0.56
+
+    // 5a) Internal snap-fit locking ring inside cap mouth
+    const lockCollarGeo = new THREE.CylinderGeometry(
+      frontCapRadius * 0.94,
+      frontCapRadius * 0.94,
+      0.075,
+      20,
+      1,
+      true
+    );
+    lockCollarGeo.rotateX(Math.PI * 0.5);
+    const lockCollar = new THREE.Mesh(lockCollarGeo, innerCapAccentMat);
+    lockCollar.position.z = frontCapStartZ + 0.055;
+    lockCollar.renderOrder = 2;
+    this.group.add(lockCollar);
+    this.visualMeshes.push(lockCollar);
+    this.disposables.push(lockCollarGeo);
+
+    // 5b) Internal nib-seal cup / inner sleeve cradling the metallic nib tip
+    const sealCupPts = [
+      new THREE.Vector2(radius * 0.72, neckEndZ + 0.41),
+      new THREE.Vector2(radius * 0.68, neckEndZ + 0.45),
+      new THREE.Vector2(radius * 0.58, neckEndZ + 0.61),
+      new THREE.Vector2(radius * 0.45, neckEndZ + 0.72),
+      new THREE.Vector2(0.0, neckEndZ + 0.74),
+    ];
+    const sealCupGeo = new THREE.LatheGeometry(sealCupPts, 18);
+    sealCupGeo.rotateX(Math.PI * 0.5);
+    const sealCup = new THREE.Mesh(sealCupGeo, innerSealCupMat);
+    sealCup.renderOrder = 2;
+    this.group.add(sealCup);
+    this.visualMeshes.push(sealCup);
+    this.disposables.push(sealCupGeo);
+
+    // 5c) Internal longitudinal reinforcement ribs lining the transparent cap interior
+    const ribGeos: THREE.BufferGeometry[] = [];
+    for (let i = 0; i < 4; i++) {
+      const angle = (i / 4) * Math.PI * 2 + Math.PI * 0.25;
+      const ribGeo = new THREE.BoxGeometry(0.011, 0.014, 0.58);
+      ribGeo.translate(0, frontCapRadius * 0.87, frontCapStartZ + 0.41);
+      ribGeo.rotateZ(angle);
+      ribGeos.push(ribGeo);
+    }
+    const mergedRibsGeo = BufferGeometryUtils.mergeGeometries(ribGeos, false) ?? ribGeos[0];
+    for (const g of ribGeos) {
+      if (g !== mergedRibsGeo) g.dispose();
+    }
+    const innerRibs = new THREE.Mesh(mergedRibsGeo, innerRibMat);
+    innerRibs.renderOrder = 2;
+    this.group.add(innerRibs);
+    this.visualMeshes.push(innerRibs);
+    this.disposables.push(mergedRibsGeo);
+
+    // 6. Transparent curved protective front cap & curved pocket clip (renderOrder: 4)
+    const frontCapProfile = [
+      new THREE.Vector2(frontCapRadius * 1.03, frontCapStartZ),
+      new THREE.Vector2(frontCapRadius * 1.035, frontCapStartZ + 0.04),
+      new THREE.Vector2(frontCapRadius, frontCapStartZ + 0.075),
+      new THREE.Vector2(frontCapRadius, frontCapStartZ + 0.56),
+      new THREE.Vector2(frontCapRadius * 0.94, frontCapStartZ + 0.78),
+      new THREE.Vector2(frontCapRadius * 0.8, frontCapStartZ + 0.94),
+      new THREE.Vector2(frontCapRadius * 0.56, frontCapStartZ + 1.06),
+      new THREE.Vector2(frontCapRadius * 0.28, halfLen - 0.025),
+      new THREE.Vector2(0.0, halfLen),
+    ];
+    const clearCapGeo = new THREE.LatheGeometry(frontCapProfile, 28);
+    clearCapGeo.rotateX(Math.PI * 0.5);
+    const clearCap = new THREE.Mesh(clearCapGeo, clearCapMat);
+    clearCap.castShadow = true;
+    clearCap.renderOrder = 4;
+    this.group.add(clearCap);
+    this.visualMeshes.push(clearCap);
+    this.disposables.push(clearCapGeo);
+
+    // Slim curved transparent pocket clip attached near the cap dome
+    const clipProfile = new THREE.Shape();
+    clipProfile.moveTo(0, 0);
+    clipProfile.lineTo(0.68, 0.008);
+    clipProfile.quadraticCurveTo(0.75, 0.018, 0.74, 0.036);
+    clipProfile.lineTo(0.05, 0.044);
+    clipProfile.quadraticCurveTo(-0.02, 0.036, 0, 0);
+    clipProfile.closePath();
+
+    const capClipGeo = new THREE.ExtrudeGeometry(clipProfile, {
+      depth: 0.042,
+      bevelEnabled: true,
+      bevelThickness: 0.007,
+      bevelSize: 0.007,
+      bevelSegments: 2,
+    });
+    capClipGeo.rotateY(Math.PI * 0.5);
+    capClipGeo.translate(-0.021, frontCapRadius * 0.88, frontCapStartZ + 0.86);
+    const capClip = new THREE.Mesh(capClipGeo, clearCapMat);
+    capClip.castShadow = true;
+    capClip.renderOrder = 4;
+    this.group.add(capClip);
+    this.visualMeshes.push(capClip);
+    this.disposables.push(capClipGeo);
+
+    // 7. Active-turn aura ring under/around pen
+    const glowGeo = new THREE.CylinderGeometry(radius * 1.48, radius * 1.48, spec.length * 0.96, 16);
+    glowGeo.rotateX(Math.PI * 0.5);
+    const glowMat = new THREE.MeshBasicMaterial({
+      color: isBlueTeam ? 0x38bdf8 : 0xf43f5e,
+      transparent: true,
+      opacity: 0.0,
+      depthWrite: false,
+      side: THREE.BackSide,
+    });
+    this.highlightGlow = new THREE.Mesh(glowGeo, glowMat);
+    this.group.add(this.highlightGlow);
+    this.disposables.push(glowGeo, glowMat);
+
+    // 8. Invisible cylindrical proxy mesh for raycasting
     const proxyGeo = new THREE.CylinderGeometry(radius * 2.6, radius * 2.6, spec.length + 0.42, 12);
     proxyGeo.rotateX(Math.PI * 0.5);
     const proxyMat = new THREE.MeshBasicMaterial({ visible: false });
@@ -715,8 +1116,8 @@ export class PenModel {
         this.contactShadow.rotation.set(0, yaw, 0);
       }
 
-      // Height above tabletop resting position (resting Y is currentRadius + 0.005)
-      const restY = this.currentRadius + 0.005;
+      // Height above tabletop resting position
+      const restY = this.currentRestY;
       const h = Math.max(0, pos.y - restY);
 
       // Natural spread responding to pen height (ambient occlusion diffusion)

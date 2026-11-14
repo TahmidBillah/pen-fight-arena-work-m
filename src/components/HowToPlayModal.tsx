@@ -68,7 +68,7 @@ export const HowToPlayModal: React.FC<HowToPlayModalProps> = ({ isOpen, onClose 
             3. Pull Back &amp; Release
           </div>
           <p className="mt-1.5 text-xs leading-relaxed text-[#57534E]">
-            Pull further for higher launch power. The dotted prediction arc shows your live physics path and potential collisions. Knock opposing pens off the desk to win!
+            Pull further for higher launch power and use the direction arrow to aim your shot. Knock opposing pens off the desk to win!
           </p>
         </div>
       </div>

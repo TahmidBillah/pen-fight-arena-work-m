@@ -2,6 +2,7 @@ import React from 'react';
 import {
   AlertTriangle,
   Crosshair,
+  Feather,
   Hammer,
   LogOut,
   Orbit,
@@ -13,7 +14,7 @@ import {
 } from 'lucide-react';
 import { DifficultyLevel, GameSnapshot } from '../game/GameState';
 import type { PerformanceMonitor } from '../game/PerformanceMonitor';
-import { PenAbilityId } from '../utils/Constants';
+import { PEN_SPECS, PenAbilityId } from '../utils/Constants';
 import { MultiplayerHUD } from './MultiplayerHUD';
 import { PerformanceOverlay } from './PerformanceOverlay';
 
@@ -21,11 +22,9 @@ interface GameHUDProps {
   snapshot: GameSnapshot;
   difficulty: DifficultyLevel;
   sfxEnabled: boolean;
-  showTrajectory: boolean;
   monitor: PerformanceMonitor | null;
   showFps: boolean;
   onToggleSfx: () => void;
-  onToggleTrajectory: () => void;
   onActivateAbility: () => void;
   onPause: () => void;
   onRestart: () => void;
@@ -41,6 +40,7 @@ export type AbilityIconComponent = React.ComponentType<{
 
 export const PASSIVE_ICONS: Record<PenAbilityId, AbilityIconComponent> = {
   CAP_LOCK: ShieldCheck,
+  DESHI_GLIDE: Feather,
   HEAVY_IMPACT: Hammer,
   QUICK_RECOVERY: Wind,
   PRECISION_PULL: Crosshair,
@@ -52,11 +52,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   snapshot,
   difficulty,
   sfxEnabled,
-  showTrajectory,
   monitor,
   showFps,
   onToggleSfx,
-  onToggleTrajectory,
   onActivateAbility,
   onPause,
   onRestart,
@@ -69,11 +67,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       <MultiplayerHUD
         snapshot={snapshot}
         sfxEnabled={sfxEnabled}
-        showTrajectory={showTrajectory}
         monitor={monitor}
         showFps={showFps}
         onToggleSfx={onToggleSfx}
-        onToggleTrajectory={onToggleTrajectory}
         onActivateAbility={onActivateAbility}
         onPause={onPause}
         onRestart={onRestart}
@@ -95,8 +91,6 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       (snapshot.matchState === 'SHOT_IN_PROGRESS' && snapshot.activeTurn === 'bot'));
 
   const diffLabel = difficulty.charAt(0) + difficulty.slice(1).toLowerCase();
-  const drag = snapshot.dragTelemetry;
-  const powerPct = Math.round(drag.powerRatio * 100);
 
   const playerCard = (
     <div
@@ -114,7 +108,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           <span className="font-mono-num text-[#365B82]">{snapshot.wins}W</span>
         </div>
         <div className="text-[9px] font-semibold uppercase tracking-wider text-[#6E6A64] sm:text-[10px]">
-          {snapshot.matchState === 'PLAYER_TURN' ? 'Active Turn' : 'Cobalt Pen'}
+          {snapshot.matchState === 'PLAYER_TURN'
+            ? 'Active Turn'
+            : PEN_SPECS[snapshot.dragTelemetry.penType]?.label ?? 'Player Pen'}
         </div>
       </div>
     </div>
@@ -251,26 +247,6 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             </div>
           </div>
         </header>
-      )}
-
-      {/* Compact Drag Power Indicator — only rendered while actively pulling a pen */}
-      {drag.isDragging && (
-        <div className="pointer-events-none safe-pad-bottom fixed bottom-3 left-1/2 z-20 -translate-x-1/2 sm:bottom-4">
-          <div className="paper-shadow-sm flex items-center gap-2.5 rounded-lg border-[1.5px] border-[#45413C] bg-[#FFFDF8] px-3 py-1.5 text-[11px] font-bold text-[#292725]">
-            <span className="uppercase tracking-wider text-[#6E6A64]">{drag.anchorZone}</span>
-            <span className="h-2 w-20 overflow-hidden rounded-full border border-[#45413C] bg-[#EFEAE0]">
-              <span
-                className="block h-full transition-[width] duration-75"
-                style={{
-                  width: `${Math.max(4, powerPct)}%`,
-                  backgroundColor:
-                    powerPct > 85 ? '#B55450' : powerPct > 60 ? '#A3702B' : '#4F6D8A',
-                }}
-              />
-            </span>
-            <span className="font-mono-num text-[#292725]">{powerPct}%</span>
-          </div>
-        </div>
       )}
 
       {/* Minimal Mini Corner Controls: Pause, Restart & Quit icons */}

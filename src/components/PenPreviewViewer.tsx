@@ -3,12 +3,13 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { PenSkinId, TeamId } from '../game/MultiplayerTypes';
 import { PenModel } from '../game/Pen';
-import { PEN_SPECS, PenTypeId } from '../utils/Constants';
+import { DEFAULT_DESHI_VARIANT, DeshiColorVariantId, PEN_SPECS, PenTypeId } from '../utils/Constants';
 
 interface PenPreviewViewerProps {
   penType: PenTypeId;
   team?: TeamId;
   skinId?: PenSkinId;
+  deshiVariant?: DeshiColorVariantId;
   /** When true the model is desaturated / dimmed to signal a locked pen. */
   locked?: boolean;
   className?: string;
@@ -35,6 +36,7 @@ export const PenPreviewViewer: React.FC<PenPreviewViewerProps> = ({
   penType,
   team = 'blue',
   skinId = 'team_default',
+  deshiVariant = DEFAULT_DESHI_VARIANT,
   locked,
   className,
 }) => {
@@ -43,11 +45,13 @@ export const PenPreviewViewer: React.FC<PenPreviewViewerProps> = ({
   const penTypeRef = useRef(penType);
   const teamRef = useRef<TeamId>(team);
   const skinIdRef = useRef<PenSkinId>(skinId);
+  const deshiVariantRef = useRef<DeshiColorVariantId>(deshiVariant);
   const lockedRef = useRef(!!locked);
 
   penTypeRef.current = penType;
   teamRef.current = team;
   skinIdRef.current = skinId;
+  deshiVariantRef.current = deshiVariant;
   lockedRef.current = !!locked;
 
   useEffect(() => {
@@ -94,7 +98,14 @@ export const PenPreviewViewer: React.FC<PenPreviewViewerProps> = ({
     scene.add(root);
 
     const maxAnisotropy = renderer.capabilities.getMaxAnisotropy();
-    const pen = new PenModel('player', maxAnisotropy, penTypeRef.current, teamRef.current, skinIdRef.current);
+    const pen = new PenModel(
+      'player',
+      maxAnisotropy,
+      penTypeRef.current,
+      teamRef.current,
+      skinIdRef.current,
+      deshiVariantRef.current
+    );
     tilt.add(pen.group);
 
     const internals: ViewerInternals = { renderer, scene, camera, root, tilt, pen, envRT };
@@ -253,11 +264,11 @@ export const PenPreviewViewer: React.FC<PenPreviewViewerProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Swap the live model whenever the browsed pen, team, or skin changes.
+  // Swap the live model whenever the browsed pen, team, skin, or Deshi color changes.
   useEffect(() => {
     const internals = internalsRef.current;
     if (!internals) return;
-    internals.pen.setAppearance(penType, team, skinId);
+    internals.pen.setAppearance(penType, team, skinId, deshiVariant);
     const spec = PEN_SPECS[penType];
     const radius = spec.length * 0.6;
     const vFov = THREE.MathUtils.degToRad(internals.camera.fov);
@@ -267,7 +278,7 @@ export const PenPreviewViewer: React.FC<PenPreviewViewerProps> = ({
     const d = Math.max(distV, distH) * 1.12;
     internals.camera.position.set(0, d * 0.26, d * 0.96);
     internals.camera.lookAt(new THREE.Vector3(0, 0, 0));
-  }, [penType, team, skinId]);
+  }, [penType, team, skinId, deshiVariant]);
 
   return (
     <div

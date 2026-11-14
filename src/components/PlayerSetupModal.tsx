@@ -21,7 +21,15 @@ import {
   TeamId,
   TurnTimerOption,
 } from '../game/MultiplayerTypes';
-import { PEN_SPECS, PenTypeId } from '../utils/Constants';
+import {
+  DEFAULT_DESHI_VARIANT,
+  DESHI_COLOR_VARIANTS,
+  DeshiColorVariantId,
+  getDeshiColorVariantSpec,
+  PEN_ORDER,
+  PEN_SPECS,
+  PenTypeId,
+} from '../utils/Constants';
 import { MultiplayerStorage } from '../utils/MultiplayerStorage';
 import { getPaperRarityTheme, PaperDivider, PaperSectionLabel } from './PaperUI';
 import { PenPreviewViewer } from './PenPreviewViewer';
@@ -40,14 +48,7 @@ interface PlayerSetupModalProps {
   ) => void;
 }
 
-const ALL_PENS: PenTypeId[] = [
-  'GRIP_MASTER',
-  'IRON_FORCE',
-  'SPEED_DEMON',
-  'PRECISION_X',
-  'SPIN_MASTER',
-  'TITAN_GUARD',
-];
+const ALL_PENS: readonly PenTypeId[] = PEN_ORDER;
 
 export const PlayerSetupModal: React.FC<PlayerSetupModalProps> = ({
   isOpen,
@@ -64,7 +65,8 @@ export const PlayerSetupModal: React.FC<PlayerSetupModalProps> = ({
       mode,
       saved.savedPlayerNames,
       saved.savedPlayerPens,
-      saved.savedPlayerSkins
+      saved.savedPlayerSkins,
+      saved.savedPlayerDeshiVariants
     );
   });
   const [selectedPlayerIdx, setSelectedPlayerIdx] = useState(0);
@@ -78,7 +80,8 @@ export const PlayerSetupModal: React.FC<PlayerSetupModalProps> = ({
       mode,
       saved.savedPlayerNames,
       saved.savedPlayerPens,
-      saved.savedPlayerSkins
+      saved.savedPlayerSkins,
+      saved.savedPlayerDeshiVariants
     );
     setPlayers(roster);
     setSelectedPlayerIdx(0);
@@ -101,6 +104,8 @@ export const PlayerSetupModal: React.FC<PlayerSetupModalProps> = ({
   const penSpec = PEN_SPECS[activePlayer.penType];
   const rarity = getPaperRarityTheme(penSpec.rarity);
   const activeSkinId: PenSkinId = activePlayer.skinId ?? 'team_default';
+  const activeDeshiVariant: DeshiColorVariantId =
+    activePlayer.deshiVariant ?? DEFAULT_DESHI_VARIANT;
 
   const handleUpdateName = (index: number, newName: string) => {
     setPlayers((prev) => {
@@ -114,7 +119,11 @@ export const PlayerSetupModal: React.FC<PlayerSetupModalProps> = ({
   const handleUpdatePen = (index: number, pen: PenTypeId) => {
     setPlayers((prev) => {
       const copy = [...prev];
-      copy[index] = { ...copy[index], penType: pen };
+      copy[index] = {
+        ...copy[index],
+        penType: pen,
+        deshiVariant: copy[index].deshiVariant ?? DEFAULT_DESHI_VARIANT,
+      };
       return copy;
     });
   };
@@ -123,6 +132,14 @@ export const PlayerSetupModal: React.FC<PlayerSetupModalProps> = ({
     setPlayers((prev) => {
       const copy = [...prev];
       copy[index] = { ...copy[index], skinId };
+      return copy;
+    });
+  };
+
+  const handleUpdateDeshiVariant = (index: number, deshiVariant: DeshiColorVariantId) => {
+    setPlayers((prev) => {
+      const copy = [...prev];
+      copy[index] = { ...copy[index], deshiVariant };
       return copy;
     });
   };
@@ -159,12 +176,20 @@ export const PlayerSetupModal: React.FC<PlayerSetupModalProps> = ({
     const namesMap: Record<string, string> = {};
     const pensMap: Record<string, PenTypeId> = {};
     const skinsMap: Record<string, PenSkinId> = {};
+    const deshiVariantsMap: Record<string, DeshiColorVariantId> = {};
     for (const p of normalized) {
       namesMap[p.id] = p.name;
       pensMap[p.id] = p.penType;
       skinsMap[p.id] = p.skinId ?? 'team_default';
+      deshiVariantsMap[p.id] = p.deshiVariant ?? DEFAULT_DESHI_VARIANT;
     }
-    MultiplayerStorage.saveRosterSelections(namesMap, pensMap, turnTimer, skinsMap);
+    MultiplayerStorage.saveRosterSelections(
+      namesMap,
+      pensMap,
+      turnTimer,
+      skinsMap,
+      deshiVariantsMap
+    );
 
     const queue = rotateTurnQueue(
       generateTurnQueue(normalized),
@@ -268,7 +293,11 @@ export const PlayerSetupModal: React.FC<PlayerSetupModalProps> = ({
                             )}
                           </div>
                           <div className="truncate text-[10px] font-medium text-[#6E6A64]">
-                            {spec.label} · {isBlue ? 'Blue' : 'Red'}
+                            {spec.label}
+                            {p.penType === 'DESHI_PEN'
+                              ? ` (${getDeshiColorVariantSpec(p.deshiVariant).label})`
+                              : ''}{' '}
+                            · {isBlue ? 'Blue' : 'Red'}
                           </div>
                         </div>
                       </div>
@@ -393,6 +422,7 @@ export const PlayerSetupModal: React.FC<PlayerSetupModalProps> = ({
                     penType={activePlayer.penType}
                     team={activePlayer.team}
                     skinId={activeSkinId}
+                    deshiVariant={activeDeshiVariant}
                     className="h-full w-full"
                   />
                 </div>
@@ -433,44 +463,78 @@ export const PlayerSetupModal: React.FC<PlayerSetupModalProps> = ({
               </div>
             </div>
 
-            {/* Pen Skin Finish Picker */}
-            <div>
-              <div className="mb-2 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-[#6E6A64]">
-                <Palette className="h-3.5 w-3.5 text-[#4F6D8A]" />
-                <span>Pen Skin Finish</span>
+            {/* Pen Skin Finish or Deshi Color Variant Picker */}
+            {activePlayer.penType === 'DESHI_PEN' ? (
+              <div>
+                <div className="mb-2 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-[#6E6A64]">
+                  <Palette className="h-3.5 w-3.5 text-[#4F6D8A]" />
+                  <span>Deshi Pen Color Variant</span>
+                </div>
+                <div className="grid grid-cols-5 gap-2">
+                  {DESHI_COLOR_VARIANTS.map((variant) => {
+                    const selected = activeDeshiVariant === variant.id;
+                    return (
+                      <button
+                        key={variant.id}
+                        type="button"
+                        onClick={() => handleUpdateDeshiVariant(selectedPlayerIdx, variant.id)}
+                        className={`paper-btn flex items-center gap-2 rounded-lg border-[1.5px] px-2.5 py-2 text-left ${
+                          selected
+                            ? 'border-[#365B82] bg-[#E8EFF6]'
+                            : 'border-[#45413C]/65 bg-[#FFFDF8] hover:bg-[#EFEAE0]'
+                        }`}
+                      >
+                        <span
+                          className="h-3.5 w-3.5 shrink-0 rounded-full border border-[#45413C]"
+                          style={{ backgroundColor: variant.swatchHex }}
+                        />
+                        <span className="truncate text-[10px] font-bold text-[#292725]">
+                          {variant.label}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-              <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
-                {PEN_SKINS.map((skin) => {
-                  const selected = activeSkinId === skin.id;
-                  const swatchColor =
-                    skin.id === 'team_default'
-                      ? activePlayer.team === 'blue'
-                        ? '#365B82'
-                        : '#B55450'
-                      : skin.swatchHex;
-                  return (
-                    <button
-                      key={skin.id}
-                      type="button"
-                      onClick={() => handleUpdateSkin(selectedPlayerIdx, skin.id)}
-                      className={`paper-btn flex items-center gap-2 rounded-lg border-[1.5px] px-2.5 py-2 text-left ${
-                        selected
-                          ? 'border-[#365B82] bg-[#E8EFF6]'
-                          : 'border-[#45413C]/65 bg-[#FFFDF8] hover:bg-[#EFEAE0]'
-                      }`}
-                    >
-                      <span
-                        className="h-3.5 w-3.5 shrink-0 rounded-full border border-[#45413C]"
-                        style={{ backgroundColor: swatchColor }}
-                      />
-                      <span className="truncate text-[10px] font-bold text-[#292725]">
-                        {skin.label}
-                      </span>
-                    </button>
-                  );
-                })}
+            ) : (
+              <div>
+                <div className="mb-2 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-[#6E6A64]">
+                  <Palette className="h-3.5 w-3.5 text-[#4F6D8A]" />
+                  <span>Pen Skin Finish</span>
+                </div>
+                <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+                  {PEN_SKINS.map((skin) => {
+                    const selected = activeSkinId === skin.id;
+                    const swatchColor =
+                      skin.id === 'team_default'
+                        ? activePlayer.team === 'blue'
+                          ? '#365B82'
+                          : '#B55450'
+                        : skin.swatchHex;
+                    return (
+                      <button
+                        key={skin.id}
+                        type="button"
+                        onClick={() => handleUpdateSkin(selectedPlayerIdx, skin.id)}
+                        className={`paper-btn flex items-center gap-2 rounded-lg border-[1.5px] px-2.5 py-2 text-left ${
+                          selected
+                            ? 'border-[#365B82] bg-[#E8EFF6]'
+                            : 'border-[#45413C]/65 bg-[#FFFDF8] hover:bg-[#EFEAE0]'
+                        }`}
+                      >
+                        <span
+                          className="h-3.5 w-3.5 shrink-0 rounded-full border border-[#45413C]"
+                          style={{ backgroundColor: swatchColor }}
+                        />
+                        <span className="truncate text-[10px] font-bold text-[#292725]">
+                          {skin.label}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Choose Pen Model */}
             <div>

@@ -3,6 +3,8 @@ import {
   AchievementDef,
   AchievementId,
   isPenTypeId,
+  PEN_ORDER,
+  PEN_SPECS,
   PenTypeId,
   STARTER_PEN,
 } from '../utils/Constants';
@@ -36,10 +38,17 @@ export interface ProgressionRepository {
 
 export const PROGRESSION_VERSION = 1;
 
+function getAlwaysUnlockedPens(): PenTypeId[] {
+  return PEN_ORDER.filter((id) => {
+    const type = PEN_SPECS[id].unlock.type;
+    return type === 'STARTER' || type === 'COLLECTIBLE';
+  });
+}
+
 export function createDefaultProfile(): PlayerProfile {
   return {
     version: PROGRESSION_VERSION,
-    unlockedPens: [STARTER_PEN],
+    unlockedPens: getAlwaysUnlockedPens(),
     equippedPen: STARTER_PEN,
     matchesPlayed: 0,
     wins: 0,
@@ -87,7 +96,12 @@ function normalizeProfile(raw: unknown): PlayerProfile {
   const unlocked = Array.isArray(obj.unlockedPens)
     ? obj.unlockedPens.filter((p): p is PenTypeId => isPenTypeId(p))
     : [];
-  if (!unlocked.includes(STARTER_PEN)) unlocked.unshift(STARTER_PEN);
+  for (const basePen of getAlwaysUnlockedPens()) {
+    if (!unlocked.includes(basePen)) {
+      if (basePen === STARTER_PEN) unlocked.unshift(basePen);
+      else unlocked.push(basePen);
+    }
+  }
 
   const claimed = Array.isArray(obj.claimedAchievements)
     ? obj.claimedAchievements.filter(
@@ -229,6 +243,7 @@ export class ProgressionManager {
   /** Human-readable unlock requirement for a pen (used by the locked-state panel). */
   public getUnlockHint(pen: PenTypeId, spec: { unlock: { type: string; achievementId?: AchievementId } }): string {
     if (spec.unlock.type === 'STARTER') return 'Available from the start';
+    if (spec.unlock.type === 'COLLECTIBLE') return 'Collectible Pen — Unlocked in Collection';
     const def = ACHIEVEMENTS.find((a) => a.id === spec.unlock.achievementId);
     if (!def) return 'Unknown unlock condition';
     const value = def.metric === 'wins' ? this.profile.wins : this.profile.matchesPlayed;

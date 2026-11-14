@@ -7,11 +7,9 @@ import { PerformanceOverlay } from './PerformanceOverlay';
 interface MultiplayerHUDProps {
   snapshot: GameSnapshot;
   sfxEnabled: boolean;
-  showTrajectory: boolean;
   monitor: PerformanceMonitor | null;
   showFps: boolean;
   onToggleSfx: () => void;
-  onToggleTrajectory: () => void;
   onActivateAbility: () => void;
   onPause: () => void;
   onRestart: () => void;
@@ -48,9 +46,6 @@ export const MultiplayerHUD: React.FC<MultiplayerHUDProps> = ({
       : 1;
   const isTimerDanger = timerSec <= 3 && snapshot.isTurnTimerRunning;
   const isTimerWarning = timerSec <= 5 && timerSec > 3 && snapshot.isTurnTimerRunning;
-
-  const drag = snapshot.dragTelemetry;
-  const powerPct = Math.round(drag.powerRatio * 100);
 
   const blueTeamCard = (
     <div
@@ -303,26 +298,6 @@ export const MultiplayerHUD: React.FC<MultiplayerHUDProps> = ({
             </div>
           </div>
         </header>
-      )}
-
-      {/* Compact Drag Power Indicator — only visible while dragging */}
-      {drag.isDragging && (
-        <div className="pointer-events-none safe-pad-bottom fixed bottom-3 left-1/2 z-20 -translate-x-1/2 sm:bottom-4">
-          <div className="paper-shadow-sm flex items-center gap-2.5 rounded-lg border-[1.5px] border-[#45413C] bg-[#FFFDF8] px-3 py-1.5 text-[11px] font-bold text-[#292725]">
-            <span className="uppercase tracking-wider text-[#6E6A64]">{drag.anchorZone}</span>
-            <span className="h-2 w-20 overflow-hidden rounded-full border border-[#45413C] bg-[#EFEAE0]">
-              <span
-                className="block h-full transition-[width] duration-75"
-                style={{
-                  width: `${Math.max(4, powerPct)}%`,
-                  backgroundColor:
-                    powerPct > 85 ? '#B55450' : powerPct > 60 ? '#A3702B' : '#4F6D8A',
-                }}
-              />
-            </span>
-            <span className="font-mono-num text-[#292725]">{powerPct}%</span>
-          </div>
-        </div>
       )}
 
       {/* 3-Second Match Start Countdown */}
