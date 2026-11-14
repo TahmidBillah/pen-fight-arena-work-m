@@ -60,6 +60,16 @@ export interface DragCallbacks {
    * case the normal drag impulse is skipped so the shot's own physics program owns the motion.
    */
   onAbilityLaunch: (dirX: number, dirZ: number, powerRatio: number) => boolean;
+  /**
+   * When present (online multiplayer), valid shot releases are forwarded to the server
+   * instead of applying a local physics impulse immediately.
+   */
+  onOnlineShotSubmit?: (shot: {
+    localAnchor: { x: number; y: number; z: number };
+    dirX: number;
+    dirZ: number;
+    powerRatio: number;
+  }) => void;
 }
 
 interface ReleasePlan {
@@ -403,6 +413,26 @@ export class DragController {
         this.callbacks.onShotLaunch(plan.powerRatio);
         return;
       }
+    }
+
+    if (this.callbacks.onOnlineShotSubmit) {
+      const anchorSnapshot = {
+        x: this.localAnchor.x,
+        y: this.localAnchor.y,
+        z: this.localAnchor.z,
+      };
+      this.resetInternalState();
+      if (plan.canLaunch && plan.deltaImpulse > 0.08) {
+        this.callbacks.onOnlineShotSubmit({
+          localAnchor: anchorSnapshot,
+          dirX: plan.dirX,
+          dirZ: plan.dirZ,
+          powerRatio: plan.powerRatio,
+        });
+      } else {
+        this.callbacks.onDragCancel();
+      }
+      return;
     }
 
     if (plan.canLaunch && plan.deltaImpulse > 0.08) {

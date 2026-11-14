@@ -718,6 +718,17 @@ export class PhysicsManager {
     };
   }
 
+  public setBodyPose(id: PlayerId, pose: BodyPose, wake = false): void {
+    const b = this.bodies[id];
+    if (!b) return;
+    b.setTranslation(pose.pos, wake);
+    b.setRotation(pose.rot, wake);
+    b.setLinvel(pose.linvel, wake);
+    b.setAngvel(pose.angvel, wake);
+    b.resetForces(false);
+    b.resetTorques(false);
+  }
+
   public resetPens(): void {
     for (const id in this.bodies) {
       const spawn =

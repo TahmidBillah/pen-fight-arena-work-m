@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArenaModal } from './components/ArenaModal';
 import { BenchmarkModal } from './components/BenchmarkModal';
 import { GameHUD } from './components/GameHUD';
@@ -6,14 +6,20 @@ import { HowToPlayModal } from './components/HowToPlayModal';
 import { MainMenu } from './components/MainMenu';
 import { MultiplayerModeModal } from './components/MultiplayerModeModal';
 import { MultiplayerResultModal } from './components/MultiplayerResultModal';
+import { OnlineHUD } from './components/OnlineHUD';
+import { OnlineLobbyModal } from './components/OnlineLobbyModal';
+import { OnlineResultModal } from './components/OnlineResultModal';
 import { PauseModal } from './components/PauseModal';
 import { PenSelector } from './components/PenSelector';
 import { PlayerSetupModal } from './components/PlayerSetupModal';
+import { ProfileSetupModal } from './components/ProfileSetupModal';
 import { ResultModal } from './components/ResultModal';
 import { SettingsModal } from './components/Settings';
 import { StatsModal } from './components/StatsModal';
 import { PenFightGame } from './game/Game';
 import { abilityHudDefaults, DifficultyLevel, GameSettings, GameSnapshot } from './game/GameState';
+import { useOnlineAuth } from './online/useOnlineAuth';
+import { useOnlineRoom } from './online/useOnlineRoom';
 import {
   GameMode,
   MultiplayerMatchConfig,
@@ -137,6 +143,10 @@ function createProgressionManager(): ProgressionManager {
 }
 
 export default function App() {
+  return <PenFightArenaApp />;
+}
+
+function PenFightArenaApp() {
   const canvasMountRef = useRef<HTMLDivElement | null>(null);
   const gameRef = useRef<PenFightGame | null>(null);
 
@@ -172,6 +182,21 @@ export default function App() {
   const [pendingStartingTeam, setPendingStartingTeam] = useState<TeamId>('blue');
   const multiplayerResultRecordedRef = useRef(false);
   const lastMultiplayerConfigRef = useRef<MultiplayerMatchConfig | null>(null);
+
+  // ── Online 1v1 state ────────────────────────────────────────────────────────
+  const [onlineLobbyOpen, setOnlineLobbyOpen] = useState(false);
+  const [profileEditorOpen, setProfileEditorOpen] = useState(false);
+  const [isOnlineReplaying, setIsOnlineReplaying] = useState(false);
+  const activeOnlineMatchIdRef = useRef<string | null>(null);
+  const onlineAuth = useOnlineAuth();
+  const profileModalOpen = onlineAuth.needsProfileSetup || profileEditorOpen;
+  const handleOnlineMatchFinished = useCallback(() => {
+    void onlineAuth.refreshProfile();
+  }, [onlineAuth.refreshProfile]);
+  const onlineRoom = useOnlineRoom({
+    userId: onlineAuth.user?.uid ?? null,
+    onMatchFinished: handleOnlineMatchFinished,
+  });
 
   const initialRecord = useRef({
     wins: progression.getProfile().wins,
@@ -318,6 +343,54 @@ export default function App() {
     }
   }, [settings]);
 
+  const isOnlineMatchActive = Boolean(
+    onlineAuth.user &&
+      onlineRoom.snapshot?.match &&
+      (onlineRoom.snapshot.room.status === 'IN_PROGRESS' ||
+        onlineRoom.snapshot.room.status === 'COMPLETED')
+  );
+
+  // Sync game engine whenever an online match starts or advances
+  useEffect(() => {
+    const game = gameRef.current;
+    const snap = onlineRoom.snapshot;
+    const myUserId = onlineAuth.user?.uid;
+    if (!game || !isReady) return;
+
+    if (!isOnlineMatchActive || !snap?.match || !snap.matchState || !myUserId) {
+      if (activeOnlineMatchIdRef.current !== null) {
+        activeOnlineMatchIdRef.current = null;
+        setIsOnlineReplaying(false);
+        game.exitOnlineMatch();
+      }
+      return;
+    }
+
+    if (activeOnlineMatchIdRef.current !== snap.match.id) {
+      activeOnlineMatchIdRef.current = snap.match.id;
+      setOnlineLobbyOpen(false);
+      game.enterOnlineMatch({
+        snapshot: snap,
+        myUserId,
+        onSubmitShot: (shot) => {
+          void onlineRoom.submitShot(shot);
+        },
+        onReplayStateChange: (replaying) => {
+          setIsOnlineReplaying(replaying);
+        },
+      });
+    } else {
+      game.syncOnlineMatchState(snap, onlineRoom.busyAction === 'shot');
+    }
+  }, [
+    isReady,
+    isOnlineMatchActive,
+    onlineRoom.snapshot,
+    onlineRoom.busyAction,
+    onlineAuth.user?.uid,
+    onlineRoom.submitShot,
+  ]);
+
   // A full-screen modal hides the arena, so the render/physics loop is halted instead of
   // continuing to burn GPU and CPU behind an opaque overlay.
   useEffect(() => {
@@ -330,7 +403,9 @@ export default function App() {
         statsOpen ||
         pauseOpen ||
         multiplayerModeOpen ||
-        playerSetupOpen
+        playerSetupOpen ||
+        onlineLobbyOpen ||
+        profileModalOpen
     );
   }, [
     settingsOpen,
@@ -342,6 +417,8 @@ export default function App() {
     pauseOpen,
     multiplayerModeOpen,
     playerSetupOpen,
+    onlineLobbyOpen,
+    profileModalOpen,
     isReady,
   ]);
 
@@ -356,7 +433,9 @@ export default function App() {
       statsOpen ||
       pauseOpen ||
       multiplayerModeOpen ||
-      playerSetupOpen;
+      playerSetupOpen ||
+      onlineLobbyOpen ||
+      profileModalOpen;
 
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -365,7 +444,11 @@ export default function App() {
         (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
 
       if (e.key === 'Escape') {
-        if (helpOpen) {
+        if (onlineAuth.needsProfileSetup) {
+          return;
+        } else if (profileEditorOpen) {
+          setProfileEditorOpen(false);
+        } else if (helpOpen) {
           setHelpOpen(false);
         } else if (settingsOpen) {
           setSettingsOpen(false);
@@ -381,9 +464,15 @@ export default function App() {
           setPlayerSetupOpen(false);
         } else if (multiplayerModeOpen) {
           setMultiplayerModeOpen(false);
+        } else if (onlineLobbyOpen) {
+          setOnlineLobbyOpen(false);
         } else if (pauseOpen) {
           setPauseOpen(false);
-        } else if (snapshot.matchState !== 'MENU' && snapshot.matchState !== 'MATCH_OVER') {
+        } else if (
+          !isOnlineMatchActive &&
+          snapshot.matchState !== 'MENU' &&
+          snapshot.matchState !== 'MATCH_OVER'
+        ) {
           setPauseOpen(true);
         }
         return;
@@ -422,6 +511,11 @@ export default function App() {
     pauseOpen,
     multiplayerModeOpen,
     playerSetupOpen,
+    onlineLobbyOpen,
+    profileModalOpen,
+    profileEditorOpen,
+    onlineAuth.needsProfileSetup,
+    isOnlineMatchActive,
     isReady,
   ]);
 
@@ -477,7 +571,7 @@ export default function App() {
       )}
 
       {/* Main Menu Overlay */}
-      {snapshot.matchState === 'MENU' && (
+      {snapshot.matchState === 'MENU' && !isOnlineMatchActive && (
         <MainMenu
           difficulty={settings.difficulty}
           penType={settings.playerPenType}
@@ -491,6 +585,9 @@ export default function App() {
           onOpenPenSelector={() => setPenSelectorOpen(true)}
           onPlay={() => gameRef.current?.startMatch()}
           onOpenMultiplayer={() => setMultiplayerModeOpen(true)}
+          onOpenOnline={() => setOnlineLobbyOpen(true)}
+          onlineProfile={onlineAuth.profile}
+          hasActiveOnlineRoom={Boolean(onlineRoom.snapshot?.room.status === 'WAITING')}
           onOpenArenas={() => setArenasOpen(true)}
           onOpenStats={() => setStatsOpen(true)}
           onOpenHowToPlay={() => setHelpOpen(true)}
@@ -500,8 +597,71 @@ export default function App() {
         />
       )}
 
-      {/* In-Game HUD */}
-      {isInMatch && (
+      {/* Online 1v1 HUD */}
+      {isOnlineMatchActive && onlineRoom.snapshot && onlineAuth.user && (
+        <OnlineHUD
+          snapshot={onlineRoom.snapshot}
+          myUserId={onlineAuth.user.uid}
+          realtimeStatus={onlineRoom.realtimeStatus}
+          onlineUserIds={onlineRoom.onlineUserIds}
+          isSubmittingShot={onlineRoom.busyAction === 'shot'}
+          isReplayingShot={isOnlineReplaying}
+          error={onlineRoom.error}
+          sfxEnabled={settings.sfxEnabled}
+          monitor={gameRef.current?.monitor ?? null}
+          showFps={settings.showFps}
+          onToggleSfx={handleToggleSfx}
+          onClaimTimeout={(turnNum) => void onlineRoom.claimTimeout(turnNum)}
+          onForfeit={() => void onlineRoom.forfeitMatch()}
+        />
+      )}
+
+      {/* Online 1v1 Lobby & Auth Modal */}
+      <OnlineLobbyModal
+        isOpen={onlineLobbyOpen && !onlineAuth.needsProfileSetup}
+        auth={onlineAuth}
+        room={onlineRoom}
+        unlockedPens={unlockedPens}
+        defaultPen={settings.playerPenType}
+        defaultDeshiVariant={settings.deshiVariant}
+        defaultArena={settings.arenaId}
+        onEditProfile={() => setProfileEditorOpen(true)}
+        onClose={() => setOnlineLobbyOpen(false)}
+      />
+
+      {/* Mandatory Post-Login Profile Setup / Profile Editor Modal */}
+      <ProfileSetupModal
+        isOpen={profileModalOpen}
+        mode={onlineAuth.needsProfileSetup ? 'setup' : 'edit'}
+        auth={onlineAuth}
+        onCompleteSuccess={() => {
+          setProfileEditorOpen(false);
+          if (onlineLobbyOpen) {
+            void onlineRoom.refreshRoom();
+          }
+        }}
+        onClose={() => setProfileEditorOpen(false)}
+      />
+
+      {/* Online 1v1 Result Modal */}
+      {isOnlineMatchActive && (
+        <OnlineResultModal
+          snapshot={onlineRoom.snapshot}
+          myUserId={onlineAuth.user?.uid ?? null}
+          profile={onlineAuth.profile}
+          isReplayingShot={isOnlineReplaying}
+          onPlayNewMatch={() => {
+            onlineRoom.dismissLocalRoom();
+            setOnlineLobbyOpen(true);
+          }}
+          onExitToMenu={() => {
+            onlineRoom.dismissLocalRoom();
+          }}
+        />
+      )}
+
+      {/* In-Game HUD (Local / Solo) */}
+      {isInMatch && !isOnlineMatchActive && (
         <GameHUD
           snapshot={snapshot}
           difficulty={settings.difficulty}
@@ -526,7 +686,7 @@ export default function App() {
 
       {/* Pause Menu Modal */}
       <PauseModal
-        isOpen={pauseOpen && isInMatch && snapshot.matchState !== 'MATCH_OVER'}
+        isOpen={!isOnlineMatchActive && pauseOpen && isInMatch && snapshot.matchState !== 'MATCH_OVER'}
         onResume={() => setPauseOpen(false)}
         onRestart={() => {
           setPauseOpen(false);
@@ -541,7 +701,7 @@ export default function App() {
       />
 
       {/* Match Result Modal (Solo vs AI only) */}
-      {!snapshot.multiplayer && snapshot.gameMode === 'VS_AI' && (
+      {!isOnlineMatchActive && !snapshot.multiplayer && snapshot.gameMode === 'VS_AI' && (
         <ResultModal
           snapshot={snapshot}
           progression={progressionEvent}
@@ -551,21 +711,23 @@ export default function App() {
       )}
 
       {/* Local Multiplayer Match Result Modal */}
-      <MultiplayerResultModal
-        snapshot={snapshot}
-        onRematch={() => gameRef.current?.restartMatch()}
-        onChangeSetup={() => {
-          const prev = lastMultiplayerConfigRef.current;
-          if (prev) {
-            setPendingMode(prev.mode);
-            setPendingTimer(prev.turnTimerSeconds);
-            setPendingStartingTeam(prev.startingTeam ?? 'blue');
-          }
-          gameRef.current?.returnToMenu();
-          setPlayerSetupOpen(true);
-        }}
-        onExitToMenu={() => gameRef.current?.returnToMenu()}
-      />
+      {!isOnlineMatchActive && (
+        <MultiplayerResultModal
+          snapshot={snapshot}
+          onRematch={() => gameRef.current?.restartMatch()}
+          onChangeSetup={() => {
+            const prev = lastMultiplayerConfigRef.current;
+            if (prev) {
+              setPendingMode(prev.mode);
+              setPendingTimer(prev.turnTimerSeconds);
+              setPendingStartingTeam(prev.startingTeam ?? 'blue');
+            }
+            gameRef.current?.returnToMenu();
+            setPlayerSetupOpen(true);
+          }}
+          onExitToMenu={() => gameRef.current?.returnToMenu()}
+        />
+      )}
 
       {/* Local Multiplayer Mode Selector */}
       <MultiplayerModeModal

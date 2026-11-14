@@ -23,6 +23,14 @@ import {
   PenTypeId,
   resolveArenaOrientation,
 } from '../utils/Constants';
+import type {
+  CanonicalPose,
+  CompactPoseTuple,
+  ResolvedShotSummary,
+  RoomSnapshot,
+  ShotCollisionEvent,
+  ShotKeyframe,
+} from '../shared/OnlineTypes';
 
 /** The AI always fields the same pen class so the match-up stays fair and consistent. */
 const BOT_PEN_TYPE = 'IRON_FORCE' as const;
@@ -74,6 +82,41 @@ export class PenFightGame {
   private readonly shotFocus = new THREE.Vector3();
   private resizeObserver: ResizeObserver | null = null;
   private onContextLostChange?: (lost: boolean) => void;
+
+  // ── Online 1v1 authoritative replay & input state ──────────────────────────
+  private onlineMode = false;
+  private onlineMyUserId: string | null = null;
+  private onlineMySlot: 1 | 2 = 1;
+  private onlineCanDrag = false;
+  private onlineMatchId: string | null = null;
+  private onlineLastReplayedEventId: string | null = null;
+  private onlineLatestSnapshot: RoomSnapshot | null = null;
+  private onlineOnSubmitShot:
+    | ((shot: {
+        localAnchor: { x: number; y: number; z: number };
+        dirX: number;
+        dirZ: number;
+        powerRatio: number;
+      }) => void)
+    | null = null;
+  private onlineOnReplayStateChange: ((replaying: boolean) => void) | null = null;
+  private onlineReplay: {
+    keyframes: ShotKeyframe[];
+    collisions: ShotCollisionEvent[];
+    elapsed: number;
+    duration: number;
+    nextColIdx: number;
+    targetSnapshot: RoomSnapshot;
+    shooterSlot: 1 | 2;
+  } | null = null;
+  private readonly _qVertDelta = new THREE.Quaternion().setFromAxisAngle(
+    new THREE.Vector3(0, 1, 0),
+    Math.PI * 0.5
+  );
+  private readonly _tmpQ1 = new THREE.Quaternion();
+  private readonly _tmpQ2 = new THREE.Quaternion();
+  private readonly _tmpV1 = new THREE.Vector3();
+  private readonly _tmpV2 = new THREE.Vector3();
 
   constructor(
     container: HTMLElement,
@@ -244,13 +287,30 @@ export class PenFightGame {
       this.playerPen,
       {
         canDrag: () => {
+          if (this.onlineMode) {
+            return this.onlineCanDrag && !this.onlineReplay;
+          }
           const snap = this.state.getSnapshot();
           return snap.matchState === 'PLAYER_TURN' && !snap.isTurnTimeoutNotice;
         },
-        canAcceptShot: () => this.turnManager.canAcceptShot(),
+        canAcceptShot: () => {
+          if (this.onlineMode) {
+            return this.onlineCanDrag && !this.onlineReplay;
+          }
+          return this.turnManager.canAcceptShot();
+        },
         onGrabStart: () => {
           this.audio.unlock();
           this.audio.playGrab();
+          if (this.onlineMode) {
+            const myId = this.onlineMySlot === 1 ? 'blue_1' : 'red_1';
+            const myModel = this.penModels.get(myId);
+            if (myModel) {
+              const teamColor = myModel.team === 'red' ? 0xfb7185 : 0x60a5fa;
+              myModel.setHighlight(0.48, teamColor);
+            }
+            return;
+          }
           this.turnManager.dismissTurnTransition();
           const activeId = this.turnManager.getActivePlayerId();
           const activeModel = this.penModels.get(activeId);
@@ -269,18 +329,45 @@ export class PenFightGame {
           this.turnManager.notifyShotLaunched(activeId, powerRatio);
         },
         onDragCancel: () => {
+          if (this.onlineMode) {
+            if (this.onlineCanDrag) {
+              const myId = this.onlineMySlot === 1 ? 'blue_1' : 'red_1';
+              const myModel = this.penModels.get(myId);
+              if (myModel) {
+                const teamColor = myModel.team === 'red' ? 0xfb7185 : 0x60a5fa;
+                myModel.setHighlight(0.32, teamColor);
+              }
+            }
+            return;
+          }
           if (this.state.getSnapshot().matchState === 'PLAYER_TURN') {
             const activeId = this.turnManager.getActivePlayerId();
             this.penModels.get(activeId)?.setHighlight(0.32);
           }
         },
         isAbilityArmed: () => {
+          if (this.onlineMode) return false;
           const activeId = this.turnManager.getActivePlayerId();
           return this.abilitySystem.isArmed(activeId);
         },
         onAbilityLaunch: (dirX, dirZ) => {
+          if (this.onlineMode) return false;
           const activeId = this.turnManager.getActivePlayerId();
           return this.abilitySystem.activate(activeId, dirX, dirZ);
+        },
+        onOnlineShotSubmit: (shot) => {
+          if (!this.onlineMode || !this.onlineOnSubmitShot) return;
+          const myId = this.onlineMySlot === 1 ? 'blue_1' : 'red_1';
+          this.penModels.get(myId)?.setHighlight(0);
+          this.audio.playRelease(shot.powerRatio);
+          const canonDir = this.clientDirToCanonical(shot.dirX, shot.dirZ);
+          this.onlineCanDrag = false;
+          this.onlineOnSubmitShot({
+            localAnchor: shot.localAnchor,
+            dirX: canonDir.dirX,
+            dirZ: canonDir.dirZ,
+            powerRatio: shot.powerRatio,
+          });
         },
       }
     );
@@ -538,14 +625,386 @@ export class PenFightGame {
     this.abilitySystem.applyNetworkState(state);
   }
 
+  public enterOnlineMatch(params: {
+    snapshot: RoomSnapshot;
+    myUserId: string;
+    onSubmitShot: (shot: {
+      localAnchor: { x: number; y: number; z: number };
+      dirX: number;
+      dirZ: number;
+      powerRatio: number;
+    }) => void;
+    onReplayStateChange?: (replaying: boolean) => void;
+  }): void {
+    if (!this.initialized || !params.snapshot.match || !params.snapshot.matchState) return;
+    const { snapshot, myUserId, onSubmitShot, onReplayStateChange } = params;
+    const match = snapshot.match!;
+    const penStates = snapshot.matchState!.penStates;
+
+    this.onlineMode = true;
+    this.onlineMyUserId = myUserId;
+    this.onlineMySlot = match.player1Uid === myUserId ? 1 : 2;
+    this.onlineMatchId = match.id;
+    this.onlineLastReplayedEventId = snapshot.matchState?.lastShot?.eventId ?? null;
+    this.onlineLatestSnapshot = snapshot;
+    this.onlineOnSubmitShot = onSubmitShot;
+    this.onlineOnReplayStateChange = onReplayStateChange ?? null;
+    this.onlineReplay = null;
+    this.onlineOnReplayStateChange?.(false);
+
+    this.currentMatchConfig = null;
+    this.dragController.cancelDrag();
+    this.aiController.cancel();
+    this.audio.unlock();
+
+    // Apply the room's authoritative arena visually
+    this.tableEnv.setArena(match.arenaId);
+    this.sceneManager.setArenaAtmosphere(match.arenaId);
+    if (!this.sceneManager.isSoftwareGl) {
+      this.sceneManager.precompile(this.cameraManager.camera);
+    }
+
+    // Clear old pen models
+    for (const model of this.penModels.values()) {
+      this.sceneManager.scene.remove(model.group);
+      this.sceneManager.scene.remove(model.contactShadow);
+      model.dispose();
+    }
+    this.penModels.clear();
+    this.penTypes.clear();
+
+    const p1 = penStates.player1;
+    const p2 = penStates.player2;
+
+    const p1Model = new PenModel(
+      'blue_1',
+      this.sceneManager.maxAnisotropy,
+      p1.penType,
+      'blue',
+      'team_default',
+      p1.deshiVariant
+    );
+    const p2Model = new PenModel(
+      'red_1',
+      this.sceneManager.maxAnisotropy,
+      p2.penType,
+      'red',
+      'team_default',
+      p2.deshiVariant
+    );
+    this.sceneManager.scene.add(
+      p1Model.group,
+      p1Model.contactShadow,
+      p2Model.group,
+      p2Model.contactShadow
+    );
+    this.penModels.set('blue_1', p1Model);
+    this.penModels.set('red_1', p2Model);
+    this.penTypes.set('blue_1', p1.penType);
+    this.penTypes.set('red_1', p2.penType);
+
+    const p1Pose = this.canonicalToClientPose(p1.pose);
+    const p2Pose = this.canonicalToClientPose(p2.pose);
+    this.physics.configurePens([
+      {
+        id: 'blue_1',
+        penType: p1.penType,
+        spawn: { x: p1Pose.pos.x, y: p1Pose.pos.y, z: p1Pose.pos.z, yaw: 0 },
+      },
+      {
+        id: 'red_1',
+        penType: p2.penType,
+        spawn: { x: p2Pose.pos.x, y: p2Pose.pos.y, z: p2Pose.pos.z, yaw: 0 },
+      },
+    ]);
+    this.physics.setBodyPose('blue_1', p1Pose);
+    this.physics.setBodyPose('red_1', p2Pose);
+
+    const myPenId = this.onlineMySlot === 1 ? 'blue_1' : 'red_1';
+    const myModel = this.penModels.get(myPenId)!;
+    this.dragController.setActivePen(myPenId, myModel);
+
+    this.trailSystem.reset();
+    this.aimController.setAbilityPreview(null);
+    this.abilityPreviewActive = false;
+    this.cameraManager.setMenuMode(false);
+    this.sceneManager.requestShadowUpdate();
+
+    this.applyOnlineTurnState(snapshot, false);
+    this.syncVisualTransforms();
+  }
+
+  public syncOnlineMatchState(snapshot: RoomSnapshot, isSubmitting = false): void {
+    if (!this.initialized || !this.onlineMode || !snapshot.match || !snapshot.matchState) {
+      return;
+    }
+    if (snapshot.match.id !== this.onlineMatchId) return;
+
+    this.onlineLatestSnapshot = snapshot;
+    const lastShot = snapshot.matchState.lastShot;
+
+    if (
+      lastShot &&
+      lastShot.eventId !== this.onlineLastReplayedEventId &&
+      lastShot.keyframes.length > 1
+    ) {
+      this.onlineLastReplayedEventId = lastShot.eventId;
+      this.startOnlineShotReplay(lastShot, snapshot);
+      return;
+    }
+
+    if (!this.onlineReplay) {
+      this.applyOnlinePenPoses(snapshot);
+      this.applyOnlineTurnState(snapshot, isSubmitting);
+    }
+  }
+
+  public exitOnlineMatch(): void {
+    if (!this.initialized) return;
+    this.onlineMode = false;
+    this.onlineMyUserId = null;
+    this.onlineCanDrag = false;
+    this.onlineMatchId = null;
+    this.onlineLastReplayedEventId = null;
+    this.onlineLatestSnapshot = null;
+    this.onlineOnSubmitShot = null;
+    this.onlineOnReplayStateChange?.(false);
+    this.onlineOnReplayStateChange = null;
+    this.onlineReplay = null;
+
+    this.tableEnv.setArena(this.settings.arenaId);
+    this.sceneManager.setArenaAtmosphere(this.settings.arenaId);
+    this.returnToMenu();
+  }
+
+  private canonicalToClientPose(pose: CanonicalPose): BodyPose {
+    if (this.arenaOrientation === 'horizontal') {
+      return {
+        pos: { ...pose.pos },
+        rot: { ...pose.rot },
+        linvel: { ...pose.linvel },
+        angvel: { ...pose.angvel },
+      };
+    }
+    this._tmpQ1.set(pose.rot.x, pose.rot.y, pose.rot.z, pose.rot.w).premultiply(this._qVertDelta);
+    return {
+      pos: { x: pose.pos.z, y: pose.pos.y, z: -pose.pos.x },
+      rot: { x: this._tmpQ1.x, y: this._tmpQ1.y, z: this._tmpQ1.z, w: this._tmpQ1.w },
+      linvel: { x: pose.linvel.z, y: pose.linvel.y, z: -pose.linvel.x },
+      angvel: { x: pose.angvel.z, y: pose.angvel.y, z: -pose.angvel.x },
+    };
+  }
+
+  private canonicalTupleToClient(
+    tuple: CompactPoseTuple,
+    outPos: THREE.Vector3,
+    outQuat: THREE.Quaternion
+  ): void {
+    if (this.arenaOrientation === 'horizontal') {
+      outPos.set(tuple[0], tuple[1], tuple[2]);
+      outQuat.set(tuple[3], tuple[4], tuple[5], tuple[6]);
+      return;
+    }
+    outPos.set(tuple[2], tuple[1], -tuple[0]);
+    outQuat.set(tuple[3], tuple[4], tuple[5], tuple[6]).premultiply(this._qVertDelta);
+  }
+
+  private clientPointToVector3(pt: [number, number, number]): THREE.Vector3 {
+    if (this.arenaOrientation === 'horizontal') {
+      return new THREE.Vector3(pt[0], pt[1], pt[2]);
+    }
+    return new THREE.Vector3(pt[2], pt[1], -pt[0]);
+  }
+
+  private clientDirToCanonical(dirX: number, dirZ: number): { dirX: number; dirZ: number } {
+    if (this.arenaOrientation === 'horizontal') {
+      return { dirX, dirZ };
+    }
+    return { dirX: -dirZ, dirZ: dirX };
+  }
+
+  private applyOnlinePenPoses(snapshot: RoomSnapshot): void {
+    if (!snapshot.matchState) return;
+    const p1Pose = this.canonicalToClientPose(snapshot.matchState.penStates.player1.pose);
+    const p2Pose = this.canonicalToClientPose(snapshot.matchState.penStates.player2.pose);
+    this.physics.setBodyPose('blue_1', p1Pose);
+    this.physics.setBodyPose('red_1', p2Pose);
+    this.syncVisualTransforms();
+  }
+
+  private applyOnlineTurnState(snapshot: RoomSnapshot, isSubmitting: boolean): void {
+    const match = snapshot.match;
+    if (!match) return;
+
+    const isMyTurn =
+      match.status === 'ACTIVE' && match.currentTurnUid === this.onlineMyUserId;
+    this.onlineCanDrag = isMyTurn && !isSubmitting;
+
+    const p1Model = this.penModels.get('blue_1');
+    const p2Model = this.penModels.get('red_1');
+    if (p1Model && p2Model) {
+      if (match.status === 'ACTIVE') {
+        p1Model.setHighlight(
+          match.currentTurnUid === match.player1Uid ? 0.35 : 0,
+          0x60a5fa
+        );
+        p2Model.setHighlight(
+          match.currentTurnUid === match.player2Uid ? 0.35 : 0,
+          0xfb7185
+        );
+      } else {
+        p1Model.setHighlight(0);
+        p2Model.setHighlight(0);
+      }
+    }
+
+    if (match.status === 'COMPLETED' && !this.onlineReplay) {
+      if (match.winnerUid === this.onlineMyUserId) {
+        this.audio.playVictory();
+        this.particles.spawnConfetti(new THREE.Vector3(0, 1.8, 0));
+      } else if (match.winnerUid) {
+        this.audio.playDefeat();
+      }
+    }
+
+    this.state.update({
+      matchState:
+        match.status === 'COMPLETED'
+          ? 'MATCH_OVER'
+          : isMyTurn && !isSubmitting
+            ? 'PLAYER_TURN'
+            : 'SHOT_IN_PROGRESS',
+      activeTurn: match.currentTurnUid === match.player1Uid ? 'blue_1' : 'red_1',
+      multiplayer: null,
+      gameMode: '1v1',
+    });
+  }
+
+  private startOnlineShotReplay(shot: ResolvedShotSummary, targetSnapshot: RoomSnapshot): void {
+    this.dragController.cancelDrag();
+    this.onlineCanDrag = false;
+
+    const shooterModelId = shot.shooterSlot === 1 ? 'blue_1' : 'red_1';
+    this.penModels.get(shooterModelId)?.setHighlight(0);
+    if (shot.shooterSlot !== this.onlineMySlot) {
+      this.audio.playRelease(shot.powerPct / 100);
+    }
+
+    const duration =
+      shot.keyframes.length > 0
+        ? Math.max(shot.durationSeconds, shot.keyframes[shot.keyframes.length - 1].t)
+        : shot.durationSeconds;
+
+    this.onlineReplay = {
+      keyframes: shot.keyframes,
+      collisions: shot.collisions,
+      elapsed: 0,
+      duration,
+      nextColIdx: 0,
+      targetSnapshot,
+      shooterSlot: shot.shooterSlot,
+    };
+    this.onlineOnReplayStateChange?.(true);
+
+    this.state.update({
+      matchState: 'SHOT_IN_PROGRESS',
+    });
+  }
+
+  private advanceOnlineReplay(dt: number): void {
+    const replay = this.onlineReplay;
+    if (!replay) return;
+
+    replay.elapsed += dt;
+    const t = Math.min(replay.elapsed, replay.duration);
+    const kfs = replay.keyframes;
+
+    if (kfs.length > 0) {
+      let idx = 0;
+      while (idx < kfs.length - 2 && kfs[idx + 1].t <= t) {
+        idx += 1;
+      }
+      const a = kfs[idx];
+      const b = kfs[Math.min(idx + 1, kfs.length - 1)];
+      const span = Math.max(1e-5, b.t - a.t);
+      const alpha = b === a ? 0 : THREE.MathUtils.clamp((t - a.t) / span, 0, 1);
+
+      const { halfW, halfD } = this.physics.getArenaBounds();
+      const applyInterp = (
+        id: 'blue_1' | 'red_1',
+        ta: CompactPoseTuple,
+        tb: CompactPoseTuple
+      ) => {
+        this.canonicalTupleToClient(ta, this._tmpV1, this._tmpQ1);
+        this.canonicalTupleToClient(tb, this._tmpV2, this._tmpQ2);
+        this._tmpV1.lerp(this._tmpV2, alpha);
+        this._tmpQ1.slerp(this._tmpQ2, alpha);
+        const model = this.penModels.get(id);
+        model?.syncTransform(
+          { x: this._tmpV1.x, y: this._tmpV1.y, z: this._tmpV1.z },
+          { x: this._tmpQ1.x, y: this._tmpQ1.y, z: this._tmpQ1.z, w: this._tmpQ1.w },
+          halfW,
+          halfD
+        );
+        this.physics.setBodyPose(id, {
+          pos: { x: this._tmpV1.x, y: this._tmpV1.y, z: this._tmpV1.z },
+          rot: { x: this._tmpQ1.x, y: this._tmpQ1.y, z: this._tmpQ1.z, w: this._tmpQ1.w },
+          linvel: { x: 0, y: 0, z: 0 },
+          angvel: { x: 0, y: 0, z: 0 },
+        });
+      };
+
+      applyInterp('blue_1', a.p1, b.p1);
+      applyInterp('red_1', a.p2, b.p2);
+    }
+
+    while (
+      replay.nextColIdx < replay.collisions.length &&
+      replay.collisions[replay.nextColIdx].t <= t
+    ) {
+      const col = replay.collisions[replay.nextColIdx++];
+      const pt = this.clientPointToVector3(col.point);
+      if (col.fallenSlot) {
+        this.audio.playFall(col.speed);
+        const color = col.fallenSlot === 2 ? 0xf87171 : 0x60a5fa;
+        this.particles.spawnBurst(new THREE.Vector3(pt.x, 0.1, pt.z), 16, color, 4.0);
+      } else if (col.kind === 'pen') {
+        this.audio.playPenCollision(col.speed);
+        this.particles.spawnCollisionBurst(pt, new THREE.Vector3(0, 1, 0), col.speed);
+        if (this.motionEnabled && col.speed > 4.5) {
+          this.cameraManager.addShake(Math.min(0.28, col.speed * 0.02));
+        }
+      } else {
+        this.audio.playTableImpact(col.speed, col.kind);
+        if (col.kind === 'table' && col.speed > 2.8) {
+          this.particles.spawnBurst(pt, 5, 0xe7d3b5, 2.2);
+        }
+      }
+    }
+
+    if (replay.elapsed >= replay.duration) {
+      const latest = this.onlineLatestSnapshot ?? replay.targetSnapshot;
+      this.onlineReplay = null;
+      this.onlineOnReplayStateChange?.(false);
+      this.applyOnlinePenPoses(latest);
+      this.applyOnlineTurnState(latest, false);
+    }
+  }
+
   public returnToMenu(): void {
     if (!this.initialized) return;
     const wasMultiplayer = Boolean(this.turnManager?.getMultiplayerConfig());
+    const hadOnlineIds = this.penModels.has('blue_1') || this.penModels.has('red_1');
+    this.onlineMode = false;
+    this.onlineReplay = null;
+    this.onlineCanDrag = false;
+    this.onlineOnSubmitShot = null;
+    this.onlineOnReplayStateChange = null;
     this.currentMatchConfig = null;
     this.dragController.cancelDrag();
     this.aiController.cancel();
 
-    if (wasMultiplayer || !this.penModels.has('player') || this.penModels.size > 2) {
+    if (wasMultiplayer || hadOnlineIds || !this.penModels.has('player') || this.penModels.size > 2) {
       for (const model of this.penModels.values()) {
         this.sceneManager.scene.remove(model.group);
         this.sceneManager.scene.remove(model.contactShadow);
@@ -705,121 +1164,167 @@ export class PenFightGame {
     const rawDt = this.clock.getDelta();
     const dt = Math.min(rawDt, 0.05);
 
-    if (this.hitstopTimer > 0) {
-      this.hitstopTimer = Math.max(0, this.hitstopTimer - dt);
-    } else {
-      // Advance physics simulation (fixed-timestep accumulator lives inside PhysicsManager)
-      const physicsStart = performance.now();
-      this.physics.step(
-        dt,
-        (substepDt) => {
-          this.dragController.applySubstepForce(substepDt);
-          this.aiController.applySubstepForce();
-          this.abilitySystem.onSubstep(substepDt);
-        },
-        {
-          onPenPenImpact: (point, normal, speed, penA, penB) => {
-            this.audio.playPenCollision(speed);
-            if (penA && penB) {
-              this.turnManager.recordPenContact(penA, penB, speed);
-              if (this.abilitySystem.onImpact(penA, point, speed)) {
-                this.spawnShockwaveFeedback(penA, point);
-              }
-              if (this.abilitySystem.onImpact(penB, point, speed)) {
-                this.spawnShockwaveFeedback(penB, point);
-              }
-            } else {
-              if (this.abilitySystem.onImpact('player', point, speed)) {
-                this.spawnShockwaveFeedback('player', point);
-              }
-              if (this.abilitySystem.onImpact('bot', point, speed)) {
-                this.spawnShockwaveFeedback('bot', point);
-              }
-            }
-            // Accumulate instead of emitting a React snapshot per impact — the counter is
-            // flushed at the 4 Hz diagnostics cadence, so a pile-up of collisions stays cheap.
-            this.pendingCollisions += 1;
-            this.particles.spawnCollisionBurst(point, normal, speed);
-            if (this.motionEnabled && speed > 4.5) {
-              this.cameraManager.addShake(Math.min(0.28, speed * 0.02));
-              this.hitstopTimer = 0.036; // Crisp 36ms impact hitstop
-            }
-          },
-          onPenTableImpact: (_penId, surface, point, speed) => {
-            this.audio.playTableImpact(speed, surface);
-            if (surface === 'table' && speed > 2.8) {
-              this.particles.spawnBurst(point, 5, 0xe7d3b5, 2.2);
-            }
-          },
-        }
-      );
-      this.monitor.latest.physicsMs = performance.now() - physicsStart;
-
-      this.abilitySystem.update(dt);
-      const activeId = this.turnManager?.getActivePlayerId() ?? 'player';
-      if (this.abilitySystem.isArmed(activeId) && !this.abilitySystem.canActivate(activeId)) {
-        this.abilitySystem.disarm(activeId);
-      }
-      this.applyAbilityPreview();
-      this.dragController.setInputSteadying(this.abilitySystem.getSteadying(activeId));
-      for (const id of this.penModels.keys()) {
-        this.state.updateAbility(id, this.abilitySystem.getState(id));
+    if (this.onlineMode) {
+      this.monitor.latest.physicsMs = 0;
+      if (this.onlineReplay) {
+        this.advanceOnlineReplay(dt);
+      } else {
+        const poses = this.syncVisualTransforms();
+        void poses;
       }
 
-      this.aiController.update(dt);
-      this.turnManager.update(dt);
-    }
-
-    this.updateAbilityVisuals(dt);
-    // One physics poll per frame: the poses read here are reused for the edge-warning visuals.
-    const poses = this.syncVisualTransforms();
-    const snap = this.state.getSnapshot();
-    if (snap.multiplayer) {
-      const mpPens = snap.multiplayer.players
-        .filter((p) => !p.isEliminated)
-        .map((p) => ({
-          pos: this.physics.getPose(p.id).pos,
-          level: this.physics.getEdgeProximity(p.id).level,
-        }));
-      this.tableEnv.updateEdgeWarningPens(mpPens, now);
-    } else {
-      this.tableEnv.updateEdgeWarning(
-        poses.player.pos,
-        poses.bot.pos,
-        snap.edgeWarning.player,
-        snap.edgeWarning.bot,
+      const bPose = this.physics.getPose('blue_1');
+      const rPose = this.physics.getPose('red_1');
+      this.tableEnv.updateEdgeWarningPens(
+        [
+          { pos: bPose.pos, level: this.physics.getEdgeProximity('blue_1').level },
+          { pos: rPose.pos, level: this.physics.getEdgeProximity('red_1').level },
+        ],
         now
       );
-    }
 
-    const dragView = this.dragController.getStateView();
-    if (snap.matchState === 'PLAYER_TURN' && !dragView.isDragging) {
-      const activeId = this.turnManager.getActivePlayerId();
-      const activeModel = this.penModels.get(activeId);
-      if (activeModel) {
-        const pulse = 0.28 + 0.2 * (0.5 + 0.5 * Math.sin(now * 0.0065));
-        const teamColor = activeModel.team === 'red' ? 0xfb7185 : 0x60a5fa;
-        activeModel.setHighlight(pulse, teamColor);
+      const dragView = this.dragController.getStateView();
+      if (this.onlineCanDrag && !this.onlineReplay && !dragView.isDragging) {
+        const myId = this.onlineMySlot === 1 ? 'blue_1' : 'red_1';
+        const myModel = this.penModels.get(myId);
+        if (myModel) {
+          const pulse = 0.28 + 0.2 * (0.5 + 0.5 * Math.sin(now * 0.0065));
+          const teamColor = myModel.team === 'red' ? 0xfb7185 : 0x60a5fa;
+          myModel.setHighlight(pulse, teamColor);
+        }
       }
-    }
-    this.aimController.update(dragView);
-    if (dragView.isDragging) {
-      this.telemetryTimer += dt;
-      if (this.telemetryTimer >= 0.045) {
+      this.aimController.update(dragView);
+      if (dragView.isDragging) {
+        this.telemetryTimer += dt;
+        if (this.telemetryTimer >= 0.045) {
+          this.telemetryTimer = 0;
+          this.dragController.emitTelemetry();
+        }
+      } else {
         this.telemetryTimer = 0;
-        this.dragController.emitTelemetry();
+      }
+      this.particles.update(dt);
+      this.cameraManager.update(dt);
+      if (dragView.isDragging || Boolean(this.onlineReplay)) {
+        this.sceneManager.requestShadowUpdate();
       }
     } else {
-      this.telemetryTimer = 0;
-    }
-    this.particles.update(dt);
-    this.cameraManager.update(dt);
+      if (this.hitstopTimer > 0) {
+        this.hitstopTimer = Math.max(0, this.hitstopTimer - dt);
+      } else {
+        // Advance physics simulation (fixed-timestep accumulator lives inside PhysicsManager)
+        const physicsStart = performance.now();
+        this.physics.step(
+          dt,
+          (substepDt) => {
+            this.dragController.applySubstepForce(substepDt);
+            this.aiController.applySubstepForce();
+            this.abilitySystem.onSubstep(substepDt);
+          },
+          {
+            onPenPenImpact: (point, normal, speed, penA, penB) => {
+              this.audio.playPenCollision(speed);
+              if (penA && penB) {
+                this.turnManager.recordPenContact(penA, penB, speed);
+                if (this.abilitySystem.onImpact(penA, point, speed)) {
+                  this.spawnShockwaveFeedback(penA, point);
+                }
+                if (this.abilitySystem.onImpact(penB, point, speed)) {
+                  this.spawnShockwaveFeedback(penB, point);
+                }
+              } else {
+                if (this.abilitySystem.onImpact('player', point, speed)) {
+                  this.spawnShockwaveFeedback('player', point);
+                }
+                if (this.abilitySystem.onImpact('bot', point, speed)) {
+                  this.spawnShockwaveFeedback('bot', point);
+                }
+              }
+              // Accumulate instead of emitting a React snapshot per impact — the counter is
+              // flushed at the 4 Hz diagnostics cadence, so a pile-up of collisions stays cheap.
+              this.pendingCollisions += 1;
+              this.particles.spawnCollisionBurst(point, normal, speed);
+              if (this.motionEnabled && speed > 4.5) {
+                this.cameraManager.addShake(Math.min(0.28, speed * 0.02));
+                this.hitstopTimer = 0.036; // Crisp 36ms impact hitstop
+              }
+            },
+            onPenTableImpact: (_penId, surface, point, speed) => {
+              this.audio.playTableImpact(speed, surface);
+              if (surface === 'table' && speed > 2.8) {
+                this.particles.spawnBurst(point, 5, 0xe7d3b5, 2.2);
+              }
+            },
+          }
+        );
+        this.monitor.latest.physicsMs = performance.now() - physicsStart;
 
-    // On-demand dynamic shadows: request shadow map pass only when objects are moving or active
-    const dragActive = dragView.isDragging;
-    const pensSettled = this.physics ? this.physics.arePensSettled(0.03, 0.06) : true;
-    if (dragActive || !pensSettled || this.hitstopTimer > 0) {
-      this.sceneManager.requestShadowUpdate();
+        this.abilitySystem.update(dt);
+        const activeId = this.turnManager?.getActivePlayerId() ?? 'player';
+        if (this.abilitySystem.isArmed(activeId) && !this.abilitySystem.canActivate(activeId)) {
+          this.abilitySystem.disarm(activeId);
+        }
+        this.applyAbilityPreview();
+        this.dragController.setInputSteadying(this.abilitySystem.getSteadying(activeId));
+        for (const id of this.penModels.keys()) {
+          this.state.updateAbility(id, this.abilitySystem.getState(id));
+        }
+
+        this.aiController.update(dt);
+        this.turnManager.update(dt);
+      }
+
+      this.updateAbilityVisuals(dt);
+      // One physics poll per frame: the poses read here are reused for the edge-warning visuals.
+      const poses = this.syncVisualTransforms();
+      const snap = this.state.getSnapshot();
+      if (snap.multiplayer) {
+        const mpPens = snap.multiplayer.players
+          .filter((p) => !p.isEliminated)
+          .map((p) => ({
+            pos: this.physics.getPose(p.id).pos,
+            level: this.physics.getEdgeProximity(p.id).level,
+          }));
+        this.tableEnv.updateEdgeWarningPens(mpPens, now);
+      } else {
+        this.tableEnv.updateEdgeWarning(
+          poses.player.pos,
+          poses.bot.pos,
+          snap.edgeWarning.player,
+          snap.edgeWarning.bot,
+          now
+        );
+      }
+
+      const dragView = this.dragController.getStateView();
+      if (snap.matchState === 'PLAYER_TURN' && !dragView.isDragging) {
+        const activeId = this.turnManager.getActivePlayerId();
+        const activeModel = this.penModels.get(activeId);
+        if (activeModel) {
+          const pulse = 0.28 + 0.2 * (0.5 + 0.5 * Math.sin(now * 0.0065));
+          const teamColor = activeModel.team === 'red' ? 0xfb7185 : 0x60a5fa;
+          activeModel.setHighlight(pulse, teamColor);
+        }
+      }
+      this.aimController.update(dragView);
+      if (dragView.isDragging) {
+        this.telemetryTimer += dt;
+        if (this.telemetryTimer >= 0.045) {
+          this.telemetryTimer = 0;
+          this.dragController.emitTelemetry();
+        }
+      } else {
+        this.telemetryTimer = 0;
+      }
+      this.particles.update(dt);
+      this.cameraManager.update(dt);
+
+      // On-demand dynamic shadows: request shadow map pass only when objects are moving or active
+      const dragActive = dragView.isDragging;
+      const pensSettled = this.physics ? this.physics.arePensSettled(0.03, 0.06) : true;
+      if (dragActive || !pensSettled || this.hitstopTimer > 0) {
+        this.sceneManager.requestShadowUpdate();
+      }
     }
 
     this.sceneManager.render(this.cameraManager.camera);

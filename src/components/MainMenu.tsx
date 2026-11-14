@@ -4,6 +4,7 @@ import {
   Award,
   BookOpen,
   Compass,
+  Globe,
   PenTool,
   Play,
   Settings as SettingsIcon,
@@ -12,6 +13,7 @@ import {
   VolumeX,
 } from 'lucide-react';
 import { DifficultyLevel } from '../game/GameState';
+import type { UserProfile } from '../shared/OnlineTypes';
 import {
   DeshiColorVariantId,
   getDeshiColorVariantSpec,
@@ -34,6 +36,9 @@ interface MainMenuProps {
   onOpenPenSelector: () => void;
   onPlay: () => void;
   onOpenMultiplayer: () => void;
+  onOpenOnline: () => void;
+  onlineProfile?: UserProfile | null;
+  hasActiveOnlineRoom?: boolean;
   onOpenArenas: () => void;
   onOpenStats: () => void;
   onOpenHowToPlay: () => void;
@@ -62,6 +67,9 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   onOpenPenSelector,
   onPlay,
   onOpenMultiplayer,
+  onOpenOnline,
+  onlineProfile,
+  hasActiveOnlineRoom,
   onOpenArenas,
   onOpenStats,
   onOpenHowToPlay,
@@ -93,6 +101,27 @@ export const MainMenu: React.FC<MainMenuProps> = ({
         </button>
 
         <div className="pointer-events-auto flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onOpenOnline}
+            className="paper-btn flex h-10 items-center gap-1.5 rounded-lg border-[1.5px] border-[#45413C] bg-[#FFFDF8] px-3 text-xs font-bold text-[#292725] hover:bg-[#EFEAE0] focus-visible:outline-2 focus-visible:outline-[#4F6D8A]"
+            title={
+              onlineProfile
+                ? onlineProfile.profileCompleted
+                  ? `${onlineProfile.displayName} (@${onlineProfile.username})`
+                  : 'Complete your player profile'
+                : 'Online 1v1 Profile & Lobby'
+            }
+          >
+            <Globe className="h-3.5 w-3.5 text-[#2E664B]" />
+            <span className="hidden max-w-[140px] truncate sm:inline">
+              {onlineProfile
+                ? onlineProfile.profileCompleted
+                  ? onlineProfile.displayName || `@${onlineProfile.username}`
+                  : 'Finish Setup'
+                : 'Sign In'}
+            </span>
+          </button>
           {onOpenBenchmark && (
             <button
               type="button"
@@ -188,6 +217,18 @@ export const MainMenu: React.FC<MainMenuProps> = ({
               >
                 <Play className="h-4 w-4 fill-current" />
                 <span>{isReady ? 'Play vs AI' : 'Preparing Desk...'}</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={!isReady}
+                onClick={onOpenOnline}
+                className="paper-btn flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg border-[1.5px] border-[#45413C] bg-[#E6F2EC] px-4 text-xs font-bold uppercase tracking-[0.05em] text-[#2E664B] hover:bg-[#D5E9DE] focus-visible:outline-2 focus-visible:outline-[#2E664B] disabled:cursor-wait disabled:opacity-60"
+              >
+                <Globe className="h-4 w-4 text-[#2E664B]" />
+                <span>
+                  {hasActiveOnlineRoom ? 'Resume Online 1v1 Room' : 'Online 1v1 (Private Room)'}
+                </span>
               </button>
 
               <button

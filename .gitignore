@@ -1,0 +1,13 @@
+# Dependencies & build output
+node_modules/
+dist/
+server.js
+
+# Local environment secrets (never commit real Firebase Admin private keys)
+.env
+.env.local
+.env.*.local
+
+# OS / editor / logs
+.DS_Store
+*.log

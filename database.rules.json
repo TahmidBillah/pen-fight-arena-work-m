@@ -1,0 +1,57 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+
+    "users": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": false
+      }
+    },
+
+    "playerStats": {
+      "$uid": {
+        ".read": "auth != null",
+        ".write": false
+      }
+    },
+
+    "matchHistory": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": false
+      }
+    },
+
+    "nicknames": {
+      ".read": false,
+      ".write": false
+    },
+
+    "rateLimits": {
+      ".read": false,
+      ".write": false
+    },
+
+    "matchIndex": {
+      ".read": false,
+      ".write": false
+    },
+
+    "rooms": {
+      "$roomCode": {
+        ".read": "auth != null && (data.child('hostUid').val() === auth.uid || data.child('players').hasChild(auth.uid))",
+        ".write": false,
+
+        "players": {
+          "$uid": {
+            "connection": {
+              ".write": "auth != null && auth.uid === $uid && root.child('rooms').child($roomCode).child('players').hasChild($uid) && newData.hasChildren(['online', 'lastSeenAt']) && newData.child('online').isBoolean() && newData.child('lastSeenAt').isNumber()"
+            }
+          }
+        }
+      }
+    }
+  }
+}
